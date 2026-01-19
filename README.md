@@ -24,6 +24,8 @@ Perfect for preventing sleep/lock screens during presentations, downloads, or re
 
 ## 🚀 Quick Start
 
+You can compile the Sketch yourself and upload it to your ESP32 device, or use the precomppiled binaries from the latest Release.
+
 ### 1. Get the Hardware (~$3-5)
 
 | Board | BLE | USB HID | WiFi | Notes |
