@@ -24,7 +24,7 @@ Perfect for preventing sleep/lock screens during presentations, downloads, or re
 
 ## 🚀 Quick Start
 
-You can compile the Sketch yourself and upload it to your ESP32 device, or use the precomppiled binaries from the latest Release.
+You can compile the Sketch yourself and upload it to your ESP32 device, or use the precompiled binaries from the latest Release.
 
 ### 1. Get the Hardware (~$3-5)
 
@@ -36,27 +36,11 @@ You can compile the Sketch yourself and upload it to your ESP32 device, or use t
 | **ESP32 D1 Mini** | ✅ | ❌ | ✅ | Classic ESP32 |
 | **ESP32 NodeMCU** | ✅ | ❌ | ✅ | Classic ESP32, LED pin may vary |
 
-### 2. Install Arduino IDE
-- Download [Arduino IDE 2.x](https://www.arduino.cc/en/software)
-- Add ESP32 board support: **File → Preferences → Additional Board URLs:**
-  ```
-  https://espressif.github.io/arduino-esp32/package_esp32_index.json
-  ```
-- **Tools → Board → Boards Manager** → Install "esp32" by Espressif
+### 2. Flah the Firmware
 
-### 3. Install Libraries
-**Sketch → Include Library → Manage Libraries:**
-- **NimBLE-Arduino** by h2zero *(required for BLE)* — tested with 2.3.7
-- **PubSubClient** by Nick O'Leary *(only if using MQTT)* — tested with 2.8
-- **Adafruit NeoPixel** by Adafruit *(only for S3/S2 boards with RGB LED)* — tested with 1.15.2
+Either use a precompiled binary for your board or compile it yoursself with the Arduino IDE.  See guidance below.
 
-### 4. Configure & Upload
-1. Open `mouse-whisker.ino`
-2. Edit WiFi/MQTT credentials (or leave as `SET_IN_WEBUI` to configure later via AP mode)
-3. Select board: **Tools → Board → esp32 →** then pick your board type (see [Hardware Details](#-hardware-details) for full settings)
-4. Upload!
-
-### 5. Connect
+### 3. Connect
 
 **Option A: Use immediately with Bluetooth**
 - Pair **"Mouse Whisker XXXX"** via Bluetooth on your computer
@@ -72,25 +56,26 @@ You can compile the Sketch yourself and upload it to your ESP32 device, or use t
 
 ## ⚡ Flashing Pre-compiled Firmware
 
-Don't want to set up Arduino IDE? Flash a pre-built binary directly from your browser!
+Don't want to set up Arduino IDE? Flash a pre-built binary directly from your browser!  You can then pair it via Bluetooth and use it with defaults or connect to the **"Mouse Whisker XXXX"** WiFi hotspot to configure the device from it's own WebUI.
 
 ### Requirements
 - **Chrome, Edge, or Opera** browser (WebSerial support required)
 - USB cable connected to your ESP32 board
 
 ### Option A: ESPHome Web (Easiest)
-1. Download the `.bin` file for your board from [Releases](../../releases) or the [`/Releases`](Releases/) folder
+1. Download the `.bin` file for your board from [Releases](../../releases)
 2. Go to **[web.esphome.io](https://web.esphome.io/)**
 3. Click **Connect** and select your board's serial port
 4. Click **Install** → **Choose file** and select the downloaded `.bin`
 5. Wait for flashing to complete, then press **Reset** on your board
+6. Optionally click **Logs** to view the log messages via serial output
 
 ### Option B: Adafruit WebSerial ESPTool
 1. Download the `.bin` file for your board from [Releases](../../releases) or the [`/Releases`](Releases/) folder
 2. Go to **[Adafruit WebSerial ESPTool](https://adafruit.github.io/Adafruit_WebSerial_ESPTool/)**
 3. Click **Connect** and select your board's serial port
 4. Set the address to **`0x0`**
-5. Click **Choose a file...** and select the downloaded `.merged.bin`
+5. Click **Choose a file...** and select the downloaded `.bin`
 6. Click **Program**
 7. Press the **Reset** button on your board when complete
 
@@ -100,13 +85,35 @@ Don't want to set up Arduino IDE? Flash a pre-built binary directly from your br
 
 | File | Board | Features |
 |------|-------|----------|
-| `mouse-whisker_v1.5.0_esp32c3_ble.bin` | ESP32-C3 Super Mini | BLE + WiFi |
-| `mouse-whisker_v1.5.0_esp32s3_ble_usb.bin` | ESP32-S3 Super Mini | BLE + USB + WiFi |
-| `mouse-whisker_v1.5.0_esp32s3_ble.bin` | ESP32-S3 Super Mini | BLE + WiFi (no USB) |
-| `mouse-whisker_v1.5.0_esp32s2_usb.bin` | ESP32-S2 Super Mini | USB + WiFi |
-| `mouse-whisker_v1.5.0_esp32_ble.bin` | ESP32 D1 Mini / NodeMCU | BLE + WiFi |
+| `mouse-whisker_vX.X.X_esp32c3_ble.bin` | ESP32-C3 Super Mini | BLE + WiFi |
+| `mouse-whisker_vX.X.X_esp32s3_ble_usb.bin` | ESP32-S3 Super Mini | BLE + USB + WiFi |
+| `mouse-whisker_vX.X.X_esp32s3_ble.bin` | ESP32-S3 Super Mini | BLE + WiFi (no USB) |
+| `mouse-whisker_vX.X.X_esp32s2_usb.bin` | ESP32-S2 Super Mini | USB + WiFi |
+| `mouse-whisker_vX.X.X_esp32_ble.bin` | ESP32 D1 Mini / NodeMCU | BLE + WiFi |
 
-Pre-compiled binaries are also available in the [`/Releases`](Releases/) folder.
+## ⚙️ Compile the Firmware yourself
+
+If you want to make changes or just hardcode some of the settings, you can compile the sketch youself and upload it to your ESP device.
+
+### 1. Install Arduino IDE
+- Download [Arduino IDE 2.x](https://www.arduino.cc/en/software)
+- Add ESP32 board support: **File → Preferences → Additional Board URLs:**
+  ```
+  https://espressif.github.io/arduino-esp32/package_esp32_index.json
+  ```
+- **Tools → Board → Boards Manager** → Install "esp32" by Espressif
+
+### 2. Install Libraries
+**Sketch → Include Library → Manage Libraries:**
+- **NimBLE-Arduino** by h2zero *(required for BLE)* — tested with 2.3.7
+- **PubSubClient** by Nick O'Leary *(only if using MQTT)* — tested with 2.8
+- **Adafruit NeoPixel** by Adafruit *(only for S3/S2 boards with RGB LED)* — tested with 1.15.2
+
+### 3. Configure & Upload
+1. Open `mouse-whisker.ino`
+2. Optionally edit WiFi/MQTT credentials (or leave as `SET_IN_WEBUI` to configure later via AP mode)
+3. Select board: **Tools → Board → esp32 →** then pick your board type (see [Hardware Details](#-hardware-details) for full settings)
+4. Upload!
 
 ---
 
