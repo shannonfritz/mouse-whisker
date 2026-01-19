@@ -46,7 +46,7 @@ Either use a precompiled binary for your board or compile it yoursself with the 
 - Pair **"Mouse Whisker XXXX"** via Bluetooth on your computer
 - Works right away with default settings — no configuration needed!
 
-**Option B: Configure WiFi/MQTT first**
+**Option B: Configure via WebUI**
 1. Connect your phone/laptop to the **"Mouse Whisker XXXX"** WiFi hotspot
 2. A captive portal should open automatically (or browse to `192.168.4.1`)
 3. Enter your WiFi and MQTT credentials, save, and the device will reboot
