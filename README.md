@@ -14,33 +14,48 @@ Perfect for preventing sleep/lock screens during presentations, downloads, or re
 - 🔌 **USB HID Support** — Optional wired mode for S3/S2 boards
 - 🎲 **Randomized Movement** — Subtle, organic patterns that won't trigger detection
 - ⚙️ **Flexible Configuration** — Set WiFi/MQTT via WebUI or compile-time constants
-- � **Local WebUI** — Configure everything from your browser, no coding required
+- 🌐 **Local WebUI** — Configure everything from your browser, no coding required
 - 📶 **AP Mode & Captive Portal** — Creates its own hotspot when WiFi unavailable; auto-redirects to setup
 - 🏠 **Home Assistant Integration** — MQTT auto-discovery, full control from your dashboard
 - 💾 **Persistent Settings** — Remembers your config after power loss
 - 💡 **LED Feedback** — Breathing pulse shows status; event blinks for connections
 
+### WebUI Screenshots
+
+<p align="center">
+  <a href="images/mouse-whisker-webui-main.png"><img src="images/mouse-whisker-webui-main.png" width="250" alt="Main Settings"></a>
+  <a href="images/mouse-whisker-webui-wifi.png"><img src="images/mouse-whisker-webui-wifi.png" width="250" alt="Network Settings"></a>
+  <a href="images/mouse-whisker-webui-mqtt.png"><img src="images/mouse-whisker-webui-mqtt.png" width="250" alt="MQTT Settings"></a>
+</p>
+
+### Home Assistant Screenshots
+
+<p align="center">
+  <a href="images/mouse-whisker-ha-main.png"><img src="images/mouse-whisker-ha-main.png" width="570" alt="Home Assistant Settings"></a>
+  <a href="images/mouse-whisker-ha-config.png"><img src="images/mouse-whisker-ha-config.png" width="180" alt="Network Settings"></a>
+</p>
+
 ---
 
 ## 🚀 Quick Start
 
-You can compile the Sketch yourself and upload it to your ESP32 device, or use the precompiled binaries from the latest Release.
+Just pick the device you want to run it on, then you can flash it with the precompiled binaries from Releases, or compile and upload the Sketch yourself.
 
 ### 1. Get the Hardware (~$3-5)
 
 | Board | BLE | USB HID | WiFi | Notes |
 |-------|:---:|:-------:|:----:|-------|
-| **ESP32-C3 Super Mini** | ✅ | ❌ | ✅ | Recommended, best value |
-| **ESP32-S3 Super Mini** | ✅ | ✅ | ✅ | Full features, RGB LED |
-| **ESP32-S2 Super Mini** | ❌ | ✅ | ✅ | USB only, no Bluetooth |
-| **ESP32 D1 Mini** | ✅ | ❌ | ✅ | Classic ESP32 |
-| **ESP32 NodeMCU** | ✅ | ❌ | ✅ | Classic ESP32, LED pin may vary |
+| **[ESP32-C3 Super Mini](https://www.espboards.dev/esp32/esp32-c3-super-mini/)** | ✅ | ❌ | ✅ | Recommended, best value |
+| **[ESP32-S3 Super Mini](https://www.espboards.dev/esp32/esp32-s3-super-mini/)** | ✅ | ✅ | ✅ | Full features, RGB LED |
+| **[ESP32-S2 Mini](https://www.espboards.dev/esp32/lolin-s2-mini/)** | ❌ | ✅ | ✅ | USB only, no Bluetooth |
+| **[ESP32 D1 Mini](https://www.espboards.dev/esp32/d1-mini32/)** | ✅ | ❌ | ✅ | Classic ESP32 |
+| **[ESP32 NodeMCU](https://www.espboards.dev/esp32/nodemcu-32s/)** | ✅ | ❌ | ✅ | Classic ESP32, LED pin may vary |
 
-### 2. Flah the Firmware
+### 2. Flash the Firmware
 
-Either use a precompiled binary for your board or compile it yoursself with the Arduino IDE.  See guidance below.
+Either use a precompiled binary for your board or compile it yourself with the Arduino IDE.  See [guidance below](#flashing-firmware).
 
-### 3. Connect
+### 3. Connect it!
 
 **Option A: Use immediately with Bluetooth**
 - Pair **"Mouse Whisker XXXX"** via Bluetooth on your computer
@@ -54,15 +69,21 @@ Either use a precompiled binary for your board or compile it yoursself with the 
 
 ---
 
+<a id="flashing-firmware"></a>
+
 ## ⚡ Flashing Pre-compiled Firmware
 
-Don't want to set up Arduino IDE? Flash a pre-built binary directly from your browser!  You can then pair it via Bluetooth and use it with defaults or connect to the **"Mouse Whisker XXXX"** WiFi hotspot to configure the device from it's own WebUI.
+Don't want to set up Arduino IDE? Flash a pre-built binary directly from your browser!  You can then pair it via Bluetooth and use it with defaults or connect to the **"Mouse Whisker XXXX"** WiFi hotspot to configure the device from its own WebUI.
 
 ### Requirements
 - **Chrome, Edge, or Opera** browser (WebSerial support required)
 - USB cable connected to your ESP32 board
 
-### Option A: ESPHome Web (Easiest)
+> **💡 Tip:** If connection fails, hold the **BOOT** button on your board while clicking Connect, then release after connected.
+
+<details open>
+<summary><strong>Option A: ESPHome Web (Easiest)</strong></summary>
+
 1. Download the `.bin` file for your board from [Releases](../../releases)
 2. Go to **[web.esphome.io](https://web.esphome.io/)**
 3. Click **Connect** and select your board's serial port
@@ -70,8 +91,12 @@ Don't want to set up Arduino IDE? Flash a pre-built binary directly from your br
 5. Wait for flashing to complete, then press **Reset** on your board
 6. Optionally click **Logs** to view the log messages via serial output
 
-### Option B: Adafruit WebSerial ESPTool
-1. Download the `.bin` file for your board from [Releases](../../releases) or the [`/Releases`](Releases/) folder
+</details>
+
+<details>
+<summary><strong>Option B: Adafruit WebSerial ESPTool</strong></summary>
+
+1. Download the `.bin` file for your board from [Releases](../../releases)
 2. Go to **[Adafruit WebSerial ESPTool](https://adafruit.github.io/Adafruit_WebSerial_ESPTool/)**
 3. Click **Connect** and select your board's serial port
 4. Set the address to **`0x0`**
@@ -79,21 +104,26 @@ Don't want to set up Arduino IDE? Flash a pre-built binary directly from your br
 6. Click **Program**
 7. Press the **Reset** button on your board when complete
 
-> **💡 Tip:** If connection fails, hold the **BOOT** button on your board while clicking Connect, then release after connected.
+</details>
 
 ### Available Firmware Builds
 
+All precompiled binaries are configured for Access Point WebUI setup where it can be configured to connect to your Wifi and MQTT Brokers (Home Assistant).  If the board supports it, Bluetooth (BLE) and or USB is also enabled. 
+
 | File | Board | Features |
 |------|-------|----------|
-| `mouse-whisker_vX.X.X_esp32c3_ble.bin` | ESP32-C3 Super Mini | BLE + WiFi |
-| `mouse-whisker_vX.X.X_esp32s3_ble_usb.bin` | ESP32-S3 Super Mini | BLE + USB + WiFi |
-| `mouse-whisker_vX.X.X_esp32s3_ble.bin` | ESP32-S3 Super Mini | BLE + WiFi (no USB) |
-| `mouse-whisker_vX.X.X_esp32s2_usb.bin` | ESP32-S2 Super Mini | USB + WiFi |
-| `mouse-whisker_vX.X.X_esp32_ble.bin` | ESP32 D1 Mini / NodeMCU | BLE + WiFi |
+| `mouse-whisker_vX.X.X_esp32c3_ble.bin` | ESP32-C3 Super Mini | AP + WiFi + MQTT + BLE |
+| `mouse-whisker_vX.X.X_esp32s3_ble_usb.bin` | ESP32-S3 Super Mini | AP + WiFi + MQTT + BLE + USB |
+| `mouse-whisker_vX.X.X_esp32s3_ble.bin` | ESP32-S3 Super Mini | AP + WiFi + MQTT + BLE (no USB) |
+| `mouse-whisker_vX.X.X_esp32s2_usb.bin` | ESP32-S2 Mini | AP + WiFi + MQTT + USB |
+| `mouse-whisker_vX.X.X_esp32_ble.bin` | ESP32 D1 Mini / NodeMCU | AP + WiFi + MQTT + BLE |
 
-## ⚙️ Compile the Firmware yourself
+## ⚡ Compiling your own Firmware
 
-If you want to make changes or just hardcode some of the settings, you can compile the sketch youself and upload it to your ESP device.
+If you want to make changes or just hardcode some of the settings, you can compile the sketch yourself and upload it to your ESP device.
+
+<details>
+<summary><strong>⚙️ Compile from the Sketch...</strong></summary>
 
 ### 1. Install Arduino IDE
 - Download [Arduino IDE 2.x](https://www.arduino.cc/en/software)
@@ -112,8 +142,10 @@ If you want to make changes or just hardcode some of the settings, you can compi
 ### 3. Configure & Upload
 1. Open `mouse-whisker.ino`
 2. Optionally edit WiFi/MQTT credentials (or leave as `SET_IN_WEBUI` to configure later via AP mode)
-3. Select board: **Tools → Board → esp32 →** then pick your board type (see [Hardware Details](#-hardware-details) for full settings)
+3. Select board: **Tools → Board → esp32 →** then pick your board type (see [Hardware Details](#hardware-details) for full settings)
 4. Upload!
+
+</details>
 
 ---
 
@@ -144,7 +176,7 @@ When WiFi/MQTT is enabled, the device **auto-discovers** in Home Assistant. No Y
 ---
 
 <details>
-<summary><strong>🔧 Configuration Options</strong></summary>
+<summary><strong>🔧 Compile Time Options</strong></summary>
 
 ### Feature Flags
 
@@ -257,7 +289,7 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 |-------|----------|------|
 | ESP32-C3 Super Mini | Single (blue) | GPIO8 |
 | ESP32-S3 Super Mini | RGB (WS2812) | GPIO48 |
-| ESP32-S2 Super Mini | RGB (WS2812) | GPIO18 |
+| ESP32-S2 Mini | RGB (WS2812) | GPIO18 |
 | ESP32 D1 Mini | Single | GPIO2 |
 
 </details>
@@ -289,7 +321,7 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 - Ensure 2.4GHz network (ESP32 doesn't support 5GHz)
 
 ### No serial output / Serial Monitor blank
-- **ESP32-C3/S3/S2 Super Mini:** Set **USB CDC On Boot: Enabled** in Arduino IDE board settings, then re-upload
+- **ESP32-C3/S3 Super Mini, ESP32-S2 Mini:** Set **USB CDC On Boot: Enabled** in Arduino IDE board settings, then re-upload
 - **ESP32 D1 Mini / NodeMCU:** Should work automatically (external USB-serial chip)
 
 ### Factory Reset
@@ -301,7 +333,7 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 
 ---
 
-<details>
+<details id="hardware-details">
 <summary><strong>🔩 Hardware Details</strong></summary>
 
 ### Supported Boards
@@ -310,7 +342,7 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 |-------|-----|---------|------|-------|
 | ESP32-C3 Super Mini | ✅ | ❌ | ✅ | Best value, recommended |
 | ESP32-S3 Super Mini | ✅ | ✅ | ✅ | USB + BLE, RGB LED |
-| ESP32-S2 Super Mini | ❌ | ✅ | ✅ | USB only, no Bluetooth |
+| ESP32-S2 Mini | ❌ | ✅ | ✅ | USB only, no Bluetooth |
 | ESP32 D1 Mini | ✅ | ❌ | ✅ | Classic ESP32 |
 | ESP32 NodeMCU | ✅ | ❌ | ✅ | Classic ESP32, LED pin may vary |
 
@@ -398,7 +430,7 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 
 ---
 
-## �📄 License
+## 📄 License
 
 MIT License — Use it, modify it, share it!
 

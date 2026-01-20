@@ -11,7 +11,7 @@
     Supported Boards:
     - ESP32-C3 Super Mini: BLE + WiFi (no USB HID)
     - ESP32-S3 Super Mini: BLE + USB HID + WiFi
-    - ESP32-S2 Super Mini: USB HID + WiFi (no Bluetooth)
+    - ESP32-S2 Mini: USB HID + WiFi (no Bluetooth)
     - ESP32 NodeMCU: BLE + WiFi
     - ESP32 D1 Mini: BLE + WiFi
   
@@ -142,7 +142,7 @@
       const bool LED_ACTIVE_LOW = false;  // Usually active-high on S3
     #endif
   #elif defined(CONFIG_IDF_TARGET_ESP32S2)
-    // ESP32-S2 Super Mini has WS2812 RGB LED on GPIO18
+    // ESP32-S2 Mini has WS2812 RGB LED on GPIO18
     #define LED_TYPE_RGB
     const int LED_PIN = 18;
     const bool LED_ACTIVE_LOW = false;
