@@ -24,15 +24,17 @@ Perfect for preventing sleep/lock screens during presentations, downloads, or re
 
 <p align="center">
   <a href="images/mouse-whisker-webui-main.png"><img src="images/mouse-whisker-webui-main.png" width="250" alt="Main Settings"></a>
-  <a href="images/mouse-whisker-webui-wifi.png"><img src="images/mouse-whisker-webui-wifi.png" width="250" alt="Network Settings"></a>
-  <a href="images/mouse-whisker-webui-mqtt.png"><img src="images/mouse-whisker-webui-mqtt.png" width="250" alt="MQTT Settings"></a>
+  <a href="images/mouse-whisker-webui-settings.png"><img src="images/mouse-whisker-webui-settings.png" width="250" alt="Network, MQTT Settings and Diagnostics"></a>
+  <a href="images/mouse-whisker-webui-update.png"><img src="images/mouse-whisker-webui-update.png" width="250" alt="OTA Firmware Update"></a>
 </p>
 
 ### Home Assistant Screenshots
 
 <p align="center">
-  <a href="images/mouse-whisker-ha-main.png"><img src="images/mouse-whisker-ha-main.png" width="570" alt="Home Assistant Settings"></a>
-  <a href="images/mouse-whisker-ha-config.png"><img src="images/mouse-whisker-ha-config.png" width="180" alt="Network Settings"></a>
+  <a href="images/mouse-whisker-ha-main.png"><img src="images/mouse-whisker-ha-main.png" width="570" alt="Home Assistant Controls"></a>
+</p><p align="center">
+  <a href="images/mouse-whisker-ha-config.png"><img src="images/mouse-whisker-ha-config.png" width="180" alt="Configuration"></a>
+  <a href="images/mouse-whisker-ha-diag.png"><img src="images/mouse-whisker-ha-diag.png" width="180" alt="Diagnostics"></a>
 </p>
 
 ---
