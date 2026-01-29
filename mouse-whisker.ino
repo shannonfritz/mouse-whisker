@@ -22,7 +22,7 @@
   */
 
   // Firmware version (Semantic Versioning: MAJOR.MINOR.PATCH)
-  #define FIRMWARE_VERSION "1.6.3"
+  #define FIRMWARE_VERSION "1.6.4"
 
   // WiFi connection (required for WebUI on your network or MQTT)
   #define ENABLE_WIFI true
@@ -532,7 +532,7 @@
     payload += "\"maxMoveInterval\": " + String(maxMoveInterval) + ",";
     payload += "\"appendUniqueId\": " + String(appendUniqueId ? "true" : "false") + ",";
     int rssi = WiFi.RSSI();
-    String quality = (rssi >= -50) ? "Excellent" : (rssi >= -60) ? "Good" : (rssi >= -70) ? "Fair" : "Weak";
+    String quality = (rssi >= -50) ? "Excellent" : (rssi >= -65) ? "Good" : (rssi >= -80) ? "Weak" : "Poor";
     payload += "\"wifiRssi\": " + String(rssi) + ",";
     payload += "\"wifiQuality\": \"" + quality + "\",";
     #if ENABLE_LED
@@ -981,7 +981,7 @@
     mqttClient.publish(rssiTopic.c_str(), rssiSensor.c_str(), true);
     yieldAndProcess("wifiRssi");
 
-    // WiFi Quality sensor (Excellent/Good/Fair/Weak)
+    // WiFi Quality sensor (Excellent/Good/Weak/Poor)
     String qualityTopic = String("homeassistant/sensor/mousewhisker_") + String(uniqueId) + "/wifi_quality/config";
     String qualitySensor = "{";
     qualitySensor += "\"name\": \"WiFi Quality\",";
@@ -989,7 +989,7 @@
     qualitySensor += "\"state_topic\": \"" + MQTT_TOPIC_CONFIG + "\",";
     qualitySensor += "\"value_template\": \"{{ value_json.wifiQuality }}\",";
     qualitySensor += "\"json_attributes_topic\": \"" + MQTT_TOPIC_CONFIG + "\",";
-    qualitySensor += "\"json_attributes_template\": \"{ \\\"thresholds\\\": \\\"Excellent: ≥-50dBm, Good: ≥-60dBm, Fair: ≥-70dBm, Weak: <-70dBm\\\", \\\"rssi\\\": {{ value_json.wifiRssi }} }\",";
+    qualitySensor += "\"json_attributes_template\": \"{ \\\"thresholds\\\": \\\"Excellent: ≥-50dBm, Good: ≥-65dBm, Weak: ≥-80dBm, Poor: <-80dBm\\\", \\\"rssi\\\": {{ value_json.wifiRssi }} }\",";
     qualitySensor += "\"entity_category\": \"diagnostic\",";
     qualitySensor += "\"availability_topic\": \"" + MQTT_TOPIC_AVAILABILITY + "\",";
     qualitySensor += "\"icon\": \"mdi:wifi-strength-3\",";
@@ -1426,7 +1426,6 @@
     }
     
     WiFi.mode(WIFI_STA);
-    WiFi.persistent(false);  // Don't save to flash during connection attempts
     WiFi.setAutoReconnect(false);  // We handle reconnection ourselves in loop()
     WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);  // Helps with hidden networks
     WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
@@ -1438,17 +1437,13 @@
     // Start with normal attempts, may switch to hidden mode if detected
     bool hiddenMode = false;
     int maxAttempts = 3;
-    int timeout = 15000;
-    int retryDelay = 100;
+    int timeout = 10000;  // 10 seconds per attempt
     
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-      // Clean disconnect before each attempt (helps with hidden SSIDs)
-      WiFi.disconnect(true);  // true = also clear stored credentials
-      delay(hiddenMode ? 500 : 100);  // Longer delay for hidden SSIDs
-      
       // Use extended begin() with channel=0, bssid=NULL, connect=true for hidden SSID support
       WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str(), 0, NULL, true);
-      Serial.printf("Connecting to WiFi '%s' (attempt %d/%d)%s", wifiSSID.c_str(), attempt, maxAttempts, hiddenMode ? " [hidden mode]" : "");
+      Serial.printf("Connecting to WiFi '%s' (attempt %d/%d)%s\n", wifiSSID.c_str(), attempt, maxAttempts, hiddenMode ? " [hidden mode]" : "");
+      Serial.print("  ");  // Indent dots
       
       unsigned long start = millis();
       unsigned long lastDot = 0;
@@ -1470,7 +1465,7 @@
         Serial.println("WiFi connected");
         Serial.printf("  IP Address: %s\n", WiFi.localIP().toString().c_str());
         Serial.printf("  Signal: %d dBm (%s)\n", rssi, 
-                      rssi >= -50 ? "Excellent" : rssi >= -60 ? "Good" : rssi >= -70 ? "Fair" : "Weak");
+                      rssi >= -50 ? "Excellent" : rssi >= -65 ? "Good" : rssi >= -80 ? "Weak" : "Poor");
         #if ENABLE_LED
           ledBlink(1, 500); // 1 long pulse for WiFi connected
         #endif
@@ -1527,7 +1522,7 @@
                           hiddenCount, hiddenCount > 1 ? "s" : "");
             Serial.println("  Switching to hidden SSID mode with extended timeouts...");
             hiddenMode = true;
-            maxAttempts = 5;  // More attempts for hidden networks
+            maxAttempts = attempt + 4;  // 4 more attempts from current position
             timeout = 20000;  // Longer timeout
           } else if (!foundTarget) {
             Serial.println("  WARNING: Target SSID not found in scan (may be hidden or out of range)");
@@ -1537,7 +1532,7 @@
       }
       
       // Brief pause before retry
-      if (attempt < 3) {
+      if (attempt < maxAttempts) {
         Serial.println("  Retrying...");
         WiFi.disconnect();
         delay(1000);
@@ -1545,7 +1540,7 @@
     }
     
     // All attempts failed
-    Serial.println("WiFi connect failed after 3 attempts - starting AP mode");
+    Serial.printf("WiFi connect failed after %d attempts - starting AP mode\n", maxAttempts);
     startAPMode();
   }
   
@@ -1796,11 +1791,11 @@
     html += "<tr><td>Uptime:</td><td id='diagUptime'>" + getUptimeString() + "</td></tr>";
     html += "<tr><td>Boot Count:</td><td id='diagBootCount'>" + String(bootCount) + "</td></tr>";
     html += "<tr><td>Reset Reason:</td><td id='diagResetReason'>" + getResetReason() + "</td></tr>";
+    int rssi = WiFi.RSSI();
+    String quality = (rssi >= -50) ? "Excellent" : (rssi >= -65) ? "Good" : (rssi >= -80) ? "Weak" : "Poor";
+    html += "<tr><td>WiFi Signal:</td><td id='diagRssi'>" + String(rssi) + " dBm (" + quality + ")</td></tr>";
     html += "<tr><td>WiFi Disconnects:</td><td id='diagWifiDisc'>" + String(wifiDisconnectCount) + "</td></tr>";
     html += "<tr><td>MQTT Disconnects:</td><td id='diagMqttDisc'>" + String(mqttDisconnectCount) + "</td></tr>";
-    int rssi = WiFi.RSSI();
-    String quality = (rssi >= -50) ? "Excellent" : (rssi >= -60) ? "Good" : (rssi >= -70) ? "Fair" : "Weak";
-    html += "<tr><td>WiFi Signal:</td><td id='diagRssi'>" + String(rssi) + " dBm (" + quality + ")</td></tr>";
     html += "<tr><td>Free Heap:</td><td id='diagHeap'>" + String(ESP.getFreeHeap() / 1024) + " KB</td></tr>";
     html += F("</table>");
     html += F("<details class='help-box'><summary>How to interpret these values</summary>"
@@ -1894,7 +1889,7 @@
     json += ",\"wifiDisc\":" + String(wifiDisconnectCount);
     json += ",\"mqttDisc\":" + String(mqttDisconnectCount);
     int statusRssi = WiFi.RSSI();
-    String statusQuality = (statusRssi >= -50) ? "Excellent" : (statusRssi >= -60) ? "Good" : (statusRssi >= -70) ? "Fair" : "Weak";
+    String statusQuality = (statusRssi >= -50) ? "Excellent" : (statusRssi >= -65) ? "Good" : (statusRssi >= -80) ? "Weak" : "Poor";
     json += ",\"rssi\":" + String(statusRssi);
     json += ",\"wifiQuality\":\"" + statusQuality + "\"";
     json += ",\"heap\":" + String(ESP.getFreeHeap() / 1024);
@@ -2851,7 +2846,7 @@
         startAPMode();
       } else {
         Serial.println("WiFi disconnected, attempting reconnect...");
-        WiFi.disconnect(true);  // Stop any in-progress connection attempt
+        WiFi.disconnect();  // Stop any in-progress auto-reconnect attempt
         delay(100);
         WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str(), 0, NULL, true);  // Hidden SSID support
       }

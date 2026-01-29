@@ -4,7 +4,7 @@
 
 Perfect for preventing sleep/lock screens during presentations, downloads, or remote sessions. Works standalone or integrates with your smart home.
 
-![Version](https://img.shields.io/badge/version-1.6.3-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-1.6.4-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
@@ -168,7 +168,7 @@ When WiFi/MQTT is enabled, the device **auto-discovers** in Home Assistant. No Y
 - BLE Host (address of connected device)
 - USB Mounted (S3/S2 only)
 - WiFi Signal Strength (dBm)
-- WiFi Quality (Excellent/Good/Fair/Weak)
+- WiFi Quality (Excellent/Good/Weak/Poor)
 
 **Configuration:**
 - Min/Max Interval (1-600 seconds)
@@ -385,6 +385,13 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 ---
 
 ## 📜 Version History
+
+### v1.6.4
+- 🐛 **WiFi Reconnect Fix** — Fixed "sta is connecting, cannot set config" error when reconnecting after disconnect
+- 🐛 **Hidden SSID Retry Count** — Fixed log showing wrong attempt count when hidden mode triggered
+- 🐛 **WiFi Quality Consistency** — Aligned signal quality thresholds across WebUI, MQTT, and serial output
+- ✨ **WiFi Signal Quality in WebUI** — Diagnostics now shows signal strength with quality rating (Excellent/Good/Weak/Poor)
+- 🎨 **Serial Output Formatting** — "Connecting to WiFi" now prints before dots for better feedback in web-based serial viewers
 
 ### v1.6.3
 - ✨ **Hidden SSID Auto-Detection** — Automatically detects hidden networks and uses extended timeouts; no manual checkbox needed
