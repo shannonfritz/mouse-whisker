@@ -28,15 +28,6 @@ Perfect for preventing sleep/lock screens during presentations, downloads, or re
   <a href="images/mouse-whisker-webui-update.png"><img src="images/mouse-whisker-webui-update.png" width="250" alt="OTA Firmware Update"></a>
 </p>
 
-### Home Assistant Screenshots
-
-<p align="center">
-  <a href="images/mouse-whisker-ha-main.png"><img src="images/mouse-whisker-ha-main.png" width="570" alt="Home Assistant Controls"></a>
-</p><p align="center">
-  <a href="images/mouse-whisker-ha-config.png"><img src="images/mouse-whisker-ha-config.png" width="180" alt="Configuration"></a>
-  <a href="images/mouse-whisker-ha-diag.png"><img src="images/mouse-whisker-ha-diag.png" width="180" alt="Diagnostics"></a>
-</p>
-
 ---
 
 ## 🚀 Quick Start
@@ -47,10 +38,10 @@ Just pick the device you want to run it on, then you can flash it with the preco
 
 | Board | BLE | USB HID | WiFi | Notes |
 |-------|:---:|:-------:|:----:|-------|
-| **[ESP32-C3 Super Mini](https://www.espboards.dev/esp32/esp32-c3-super-mini/)** | ✅ | ❌ | ✅ | Recommended, best value |
+| **[ESP32-C3 Super Mini](https://www.espboards.dev/esp32/esp32-c3-super-mini/)** | ✅ | ❌ | ✅ | Small board but wifi can be weak |
 | **[ESP32-S3 Super Mini](https://www.espboards.dev/esp32/esp32-s3-super-mini/)** | ✅ | ✅ | ✅ | Full features, RGB LED |
 | **[ESP32-S2 Mini](https://www.espboards.dev/esp32/lolin-s2-mini/)** | ❌ | ✅ | ✅ | USB only, no Bluetooth |
-| **[ESP32 D1 Mini](https://www.espboards.dev/esp32/d1-mini32/)** | ✅ | ❌ | ✅ | Classic ESP32 |
+| **[ESP32 D1 Mini](https://www.espboards.dev/esp32/d1-mini32/)** | ✅ | ❌ | ✅ | Classic ESP32, *Recommended* |
 | **[ESP32 NodeMCU](https://www.espboards.dev/esp32/nodemcu-32s/)** | ✅ | ❌ | ✅ | Classic ESP32, LED pin may vary |
 
 ### 2. Flash the Firmware
@@ -86,11 +77,11 @@ Don't want to set up Arduino IDE? Flash a pre-built binary directly from your br
 <details open>
 <summary><strong>Option A: ESPHome Web (Easiest)</strong></summary>
 
-1. Download the `.bin` file for your board from [Releases](../../releases)
+1. Download the `*_full.bin` file for your board from [Releases](../../releases)
 2. Go to **[web.esphome.io](https://web.esphome.io/)**
 3. Click **Connect** and select your board's serial port
 4. Click **Install** → **Choose file** and select the downloaded `.bin`
-5. Wait for flashing to complete, then press **Reset** on your board
+5. Wait for flashing to complete, then watch the LED for status
 6. Optionally click **Logs** to view the log messages via serial output
 
 </details>
@@ -98,19 +89,18 @@ Don't want to set up Arduino IDE? Flash a pre-built binary directly from your br
 <details>
 <summary><strong>Option B: Adafruit WebSerial ESPTool</strong></summary>
 
-1. Download the `.bin` file for your board from [Releases](../../releases)
+1. Download the `*_full.bin` file for your board from [Releases](../../releases)
 2. Go to **[Adafruit WebSerial ESPTool](https://adafruit.github.io/Adafruit_WebSerial_ESPTool/)**
 3. Click **Connect** and select your board's serial port
 4. Set the address to **`0x0`**
 5. Click **Choose a file...** and select the downloaded `.bin`
-6. Click **Program**
-7. Press the **Reset** button on your board when complete
+6. Click **Program**, then watch the LED for status
 
 </details>
 
 ### Available Firmware Builds
 
-All precompiled binaries are configured for Access Point WebUI setup where it can be configured to connect to your Wifi and MQTT Brokers (Home Assistant).  If the board supports it, Bluetooth (BLE) and or USB is also enabled.
+All precompiled binaries are configured for Access Point WebUI setup where it can be configured to connect to your Wifi and MQTT Brokers (Home Assistant).  If the board supports it, Bluetooth (BLE) and or USB is also enabled as well as log output via Serial.
 
 **Two versions of each binary are provided:**
 - `*_full.bin` — Complete flash image (bootloader + partition table + app) for initial USB flashing
@@ -159,25 +149,43 @@ If you want to make changes or just hardcode some of the settings, you can compi
 
 When WiFi/MQTT is enabled, the device **auto-discovers** in Home Assistant. No YAML needed!
 
+<p align="center">
+  <a href="images/mouse-whisker-ha-main.png"><img src="images/mouse-whisker-ha-main.png" width="570" alt="Home Assistant Controls"></a>
+</p>
+
 **Controls:**
-- Whisk Randomly (on/off switch)
-- Whisk Now (button)
 - Status LED (on/off switch)
+- Whisk Now (button)
+- Whisk Randomly (on/off switch)
 
 **Sensors:**
-- Whisking (on briefly during mouse movement)
 - BLE Connected (connectivity status)
 - BLE Host (address of connected device)
 - USB Mounted (S3/S2 only)
-- WiFi Signal Strength (dBm)
-- WiFi Quality (Excellent/Good/Weak/Poor)
+- Whisking (on briefly during mouse movement)
+
+<p align="center">
+  <a href="images/mouse-whisker-ha-config.png"><img src="images/mouse-whisker-ha-config.png" width="180" alt="Configuration"></a>
+  <a href="images/mouse-whisker-ha-diag.png"><img src="images/mouse-whisker-ha-diag.png" width="180" alt="Diagnostics"></a>
+</p>
 
 **Configuration:**
+- Append ID (toggle unique ID suffix)
 - Min/Max Interval (1-600 seconds)
 - Range X/Y (0-127 pixels)
 - Mouse Name (text input)
-- Append ID (toggle unique ID suffix)
 - Reboot / Factory Reset (buttons)
+
+**Diagnostics** (when enabled):
+- Boot Count (persisted across reboots)
+- Diagnostics (on/off switch - enables diagnostic sensors)
+- Free Heap (bytes, with min_free_heap in attributes)
+- Last Reset Reason (power-on, watchdog, crash, etc.)
+- MQTT Disconnects (this session)
+- Uptime (human-readable, with seconds in attributes)
+- WiFi Disconnects (this session)
+- WiFi Quality (Excellent/Good/Weak/Poor)
+- WiFi Signal Strength (dBm)
 
 ---
 
@@ -250,6 +258,8 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 | `.../ble_connected` | `ON` or `OFF` |
 | `.../ble_host` | Address of connected BLE host (or `none`) |
 | `.../usb_mounted` | `ON` or `OFF` (S3/S2 only) |
+| `.../wifi_rssi` | WiFi signal strength in dBm |
+| `.../diagnostics` | JSON with diagnostic data (when enabled) |
 
 ### Command Topics (write)
 
@@ -263,6 +273,7 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 | `.../set/name` | USB/BLE device name (max 24 or 29 chars) |
 | `.../set/appendid` | `1`/`0` — toggle unique ID suffix |
 | `.../set/led` | `1`/`0` |
+| `.../set/diagnostics` | `1`/`0` — enable/disable diagnostic sensors |
 | `.../cmd/whisk` | Any payload — trigger immediate whisk |
 | `.../cmd/reboot` | Any payload |
 | `.../cmd/factory_reset` | Any payload |
@@ -342,44 +353,43 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 <details id="hardware-details">
 <summary><strong>🔩 Hardware Details</strong></summary>
 
-### Supported Boards
-
-| Board | BLE | USB HID | WiFi | Notes |
-|-------|-----|---------|------|-------|
-| ESP32-C3 Super Mini | ✅ | ❌ | ✅ | Best value, recommended |
-| ESP32-S3 Super Mini | ✅ | ✅ | ✅ | USB + BLE, RGB LED |
-| ESP32-S2 Mini | ❌ | ✅ | ✅ | USB only, no Bluetooth |
-| ESP32 D1 Mini | ✅ | ❌ | ✅ | Classic ESP32 |
-| ESP32 NodeMCU | ✅ | ❌ | ✅ | Classic ESP32, LED pin may vary |
-
 ### Arduino IDE Board Settings
 
 **For ESP32-C3:**
+- **Supports:** BLE HID, WiFi, WebUI, MQTT *(no USB HID)*
+- **LED:** Single (blue) on GPIO8
 - Board type in Arduino IDE: "ESP32C3 Dev Module"
 - USB CDC On Boot: Enabled *(required for serial output)*
 - Flash Size: 4MB
 - Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 **For ESP32-S3:**
+- **Supports:** BLE HID, USB HID, WiFi, WebUI, MQTT *(full feature support)*
+- **LED:** RGB (WS2812) on GPIO48
 - Board type in Arduino IDE: "ESP32S3 Dev Module"
 - USB CDC On Boot: Enabled *(required for serial output)*
 - USB Mode: Hardware CDC and JTAG
 - Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 **For ESP32-S2:**
+- **Supports:** USB HID, WiFi, WebUI, MQTT *(no Bluetooth)*
+- **LED:** RGB (WS2812) on GPIO18
 - Board type in Arduino IDE: "ESP32S2 Dev Module"
 - USB CDC On Boot: Enabled *(required for serial output)*
 - Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 **For ESP32 D1 Mini:**
+- **Supports:** BLE HID, WiFi, WebUI, MQTT *(no USB HID)*
+- **LED:** Single on GPIO2
 - Board type in Arduino IDE: "ESP32 Dev Module"
 - Serial works over USB (external USB-serial chip)
 - Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 **For ESP32 NodeMCU:**
+- **Supports:** BLE HID, WiFi, WebUI, MQTT *(no USB HID)*
+- **LED:** Single on GPIO2 *(varies by board)*
 - Board type in Arduino IDE: "ESP32 Dev Module" or "NodeMCU-32S"
 - Serial works over USB (external USB-serial chip)
-- LED pin varies by board (GPIO2 is common and will work)
 - Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 </details>
