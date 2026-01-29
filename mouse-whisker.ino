@@ -22,7 +22,7 @@
   */
 
   // Firmware version (Semantic Versioning: MAJOR.MINOR.PATCH)
-  #define FIRMWARE_VERSION "1.5.0"
+  #define FIRMWARE_VERSION "1.6.3"
 
   // WiFi connection (required for WebUI on your network or MQTT)
   #define ENABLE_WIFI true
@@ -63,6 +63,7 @@
     #endif
     #include <WebServer.h>
     #include <DNSServer.h>  // For captive portal in AP mode
+    #include <Update.h>     // For OTA firmware updates
     // AP mode settings
     // AP_PASS: Leave empty for open network, or set 8+ chars for WPA2
     const char* AP_PASS = "";  // Default: open network (no password)
@@ -240,29 +241,15 @@
   
   class BleConnectionCallbacks : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
-      Serial.println(">>> BLE onConnect callback start");
       bleConnected = true;
       bleClientAddress = connInfo.getAddress().toString().c_str();
-      Serial.println("BLE Client connected");
-      Serial.printf("  Host address: %s\n", connInfo.getAddress().toString().c_str());
-      Serial.printf("  Address type: %s\n", connInfo.getAddress().isPublic() ? "Public" : "Random");
-      Serial.printf("  Connection handle: %d\n", connInfo.getConnHandle());
-      Serial.printf("  Connection interval: %.2f ms\n", connInfo.getConnInterval() * 1.25);
-      Serial.printf("  Connection latency: %d\n", connInfo.getConnLatency());
-      Serial.printf("  Supervision timeout: %d ms\n", connInfo.getConnTimeout() * 10);
-      Serial.printf("  MTU: %d\n", pServer->getPeerMTU(connInfo.getConnHandle()));
-      // Note: MQTT publish and LED blink moved to loop() to avoid blocking BLE stack
-      Serial.println(">>> BLE onConnect callback end");
+      Serial.printf("BLE connected: %s\n", bleClientAddress.c_str());
     }
     void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
-      Serial.printf(">>> BLE onDisconnect callback (reason: %d)\n", reason);
       bleConnected = false;
       bleClientAddress = "";
-      Serial.println("BLE Client disconnected");
-      // Note: MQTT publish moved to loop() to avoid blocking BLE stack
-      // Restart advertising
+      Serial.println("BLE disconnected");
       NimBLEDevice::startAdvertising();
-      Serial.println("BLE advertising restarted");
     }
   };
   #endif
@@ -297,6 +284,10 @@
     String MQTT_TOPIC_BLE_HOST;
     String MQTT_TOPIC_USB_MOUNTED;
     String MQTT_TOPIC_WIFI_RSSI;
+    
+    // Diagnostic topics
+    String MQTT_TOPIC_DIAG;           // JSON payload with all diagnostics
+    String MQTT_TOPIC_SET_DIAG;       // Enable/disable diagnostics
 
     WiFiClient wifiClient;
     PubSubClient mqttClient(wifiClient);
@@ -320,7 +311,8 @@
     String wifiSSID;
     String wifiPassword;
     bool wifiAPMode = false;  // True if running in AP mode
-    bool portalPageSeen = false;  // Track if user has seen portal landing (iOS CNA workaround)
+    #include <map>
+    std::map<String, unsigned long> captivePortalFirstSeen;  // Track when each client first connected
   #endif
 
   #if ENABLE_MQTT
@@ -336,6 +328,14 @@
   int yRange = DEFAULT_Y_RANGE;
   int minMoveInterval = DEFAULT_MIN_MOVE_INTERVAL;
   int maxMoveInterval = DEFAULT_MAX_MOVE_INTERVAL;
+
+  // Diagnostic settings and counters
+  // When disabled: no flash writes for boot count, no periodic MQTT publishes
+  bool diagnosticsEnabled = false;         // Off by default to minimize flash wear
+  unsigned long bootCount = 0;             // Persisted boot counter (only when diagnostics enabled)
+  unsigned long wifiDisconnectCount = 0;   // WiFi reconnect count this session
+  unsigned long mqttDisconnectCount = 0;   // MQTT reconnect count this session
+  unsigned long lastWifiConnectTime = 0;   // millis() when WiFi last connected
 
   // state
   bool periodicOn = true;
@@ -368,10 +368,12 @@
     void connectMQTT();
     void publishState(const char* state);
     void publishConfigJSON();
+    void publishDiagnosticsJSON();
     void publishEventJSON(const char* event, const String &value);
     void publishDiscovery();
     void mqttCallback(char* topic, byte* payload, unsigned int length);
   #endif
+  String getResetReason();
   
   void sendMouseMove(int8_t x, int8_t y);
   void moveMouse();
@@ -388,7 +390,10 @@
     void handleWebWiFi();
     #if ENABLE_MQTT
       void handleWebMQTT();
+      void handleWebDiag();
     #endif
+    void handleFirmwarePage();
+    void handleFirmwareUpload();
     void handleCaptivePortal();
     void handleCaptiveDetect();
     String generateWebPage();
@@ -547,6 +552,66 @@
     mqttClient.publish(MQTT_TOPIC_EVENT.c_str(), payload.c_str(), false);
     #endif
   }
+
+  // Get human-readable reset reason from ESP32
+  String getResetReason() {
+    esp_reset_reason_t reason = esp_reset_reason();
+    switch (reason) {
+      case ESP_RST_POWERON:    return "Power-on";
+      case ESP_RST_EXT:        return "External reset";
+      case ESP_RST_SW:         return "Software reset";
+      case ESP_RST_PANIC:      return "Exception/Panic";
+      case ESP_RST_INT_WDT:    return "Interrupt watchdog";
+      case ESP_RST_TASK_WDT:   return "Task watchdog";
+      case ESP_RST_WDT:        return "Other watchdog";
+      case ESP_RST_DEEPSLEEP:  return "Deep sleep wake";
+      case ESP_RST_BROWNOUT:   return "Brownout";
+      case ESP_RST_SDIO:       return "SDIO";
+      default:                 return "Unknown (" + String((int)reason) + ")";
+    }
+  }
+
+  // Helper function to get formatted uptime string
+  String getUptimeString() {
+    unsigned long uptimeMs = millis();
+    unsigned long uptimeSec = uptimeMs / 1000;
+    unsigned long uptimeMin = uptimeSec / 60;
+    unsigned long uptimeHr = uptimeMin / 60;
+    unsigned long uptimeDay = uptimeHr / 24;
+    
+    if (uptimeDay > 0) {
+      return String(uptimeDay) + "d " + String(uptimeHr % 24) + "h " + String(uptimeMin % 60) + "m";
+    } else if (uptimeHr > 0) {
+      return String(uptimeHr) + "h " + String(uptimeMin % 60) + "m " + String(uptimeSec % 60) + "s";
+    } else if (uptimeMin > 0) {
+      return String(uptimeMin) + "m " + String(uptimeSec % 60) + "s";
+    } else {
+      return String(uptimeSec) + "s";
+    }
+  }
+
+  #if ENABLE_MQTT
+  // Publish diagnostic information (useful for debugging connectivity issues)
+  // Always publishes the enabled state; other fields only meaningful when enabled
+  void publishDiagnosticsJSON() {
+    unsigned long uptimeSec = millis() / 1000;
+    String uptimeStr = getUptimeString();
+    
+    String payload = "{";
+    payload += "\"enabled\": " + String(diagnosticsEnabled ? "true" : "false") + ",";
+    payload += "\"uptime_sec\": " + String(uptimeSec) + ",";
+    payload += "\"uptime\": \"" + uptimeStr + "\",";
+    payload += "\"boot_count\": " + String(bootCount) + ",";
+    payload += "\"reset_reason\": \"" + getResetReason() + "\",";
+    payload += "\"wifi_disconnects\": " + String(wifiDisconnectCount) + ",";
+    payload += "\"mqtt_disconnects\": " + String(mqttDisconnectCount) + ",";
+    payload += "\"free_heap\": " + String(ESP.getFreeHeap()) + ",";
+    payload += "\"min_free_heap\": " + String(ESP.getMinFreeHeap()) + ",";
+    payload += "\"wifi_rssi\": " + String(WiFi.RSSI()) + "}";
+    
+    mqttClient.publish(MQTT_TOPIC_DIAG.c_str(), payload.c_str(), true);
+  }
+  #endif
 
   void sendMouseMove(int8_t x, int8_t y) {
     uint8_t report[4] = {0};  // buttons, x, y, wheel
@@ -932,6 +997,131 @@
     qualitySensor += "\"device\": {\"identifiers\": [\"" + baseId + "\"],\"name\": \"Mouse Whisker " + String(uniqueId) + "\"}}";
     mqttClient.publish(qualityTopic.c_str(), qualitySensor.c_str(), true);
     yieldAndProcess("wifiQuality");
+
+    // ========== DIAGNOSTIC SENSORS ==========
+    // These help diagnose connectivity issues (WiFi vs device reboots/crashes)
+    // Diagnostics are disabled by default to minimize flash wear (boot count writes)
+    
+    // Diagnostics enable switch (controls boot count writes and periodic publishing)
+    String diagSwTopic = String("homeassistant/switch/mousewhisker_") + String(uniqueId) + "/diagnostics/config";
+    String diagSw = "{";
+    diagSw += "\"name\": \"Diagnostics\",";
+    diagSw += "\"object_id\": \"mousewhisker_" + String(uniqueId) + "_diagnostics\",";
+    diagSw += "\"command_topic\": \"" + MQTT_TOPIC_SET_DIAG + "\",";
+    diagSw += "\"state_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    diagSw += "\"value_template\": \"{{ 'ON' if value_json.enabled else 'OFF' }}\",";
+    diagSw += "\"json_attributes_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    diagSw += "\"json_attributes_template\": \"{ \\\"hint\\\": \\\"Enable to track boot count, uptime, disconnects. Writes to flash on each boot when enabled.\\\" }\",";
+    diagSw += "\"state_on\": \"ON\",";
+    diagSw += "\"state_off\": \"OFF\",";
+    diagSw += "\"payload_on\": \"1\",";
+    diagSw += "\"payload_off\": \"0\",";
+    diagSw += "\"optimistic\": false,";
+    diagSw += "\"availability_topic\": \"" + MQTT_TOPIC_AVAILABILITY + "\",";
+    diagSw += "\"icon\": \"mdi:bug-outline\",";
+    diagSw += "\"entity_category\": \"diagnostic\",";
+    diagSw += "\"unique_id\": \"" + baseId + "_diagnostics\",";
+    diagSw += "\"device\": " + deviceShort + "}";
+    mqttClient.publish(diagSwTopic.c_str(), diagSw.c_str(), true);
+    yieldAndProcess("diagSwitch");
+    
+    // Uptime sensor (human-readable format)
+    String uptimeTopic = String("homeassistant/sensor/mousewhisker_") + String(uniqueId) + "/uptime/config";
+    String uptimeSensor = "{";
+    uptimeSensor += "\"name\": \"Uptime\",";
+    uptimeSensor += "\"object_id\": \"mousewhisker_" + String(uniqueId) + "_uptime\",";
+    uptimeSensor += "\"state_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    uptimeSensor += "\"value_template\": \"{{ value_json.uptime }}\",";
+    uptimeSensor += "\"json_attributes_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    uptimeSensor += "\"json_attributes_template\": \"{ \\\"seconds\\\": {{ value_json.uptime_sec }} }\",";
+    uptimeSensor += "\"entity_category\": \"diagnostic\",";
+    uptimeSensor += "\"availability_topic\": \"" + MQTT_TOPIC_AVAILABILITY + "\",";
+    uptimeSensor += "\"icon\": \"mdi:timer-outline\",";
+    uptimeSensor += "\"unique_id\": \"" + baseId + "_uptime\",";
+    uptimeSensor += "\"device\": " + deviceShort + "}";
+    mqttClient.publish(uptimeTopic.c_str(), uptimeSensor.c_str(), true);
+    yieldAndProcess("uptime");
+
+    // Boot count sensor (persisted across reboots)
+    String bootTopic = String("homeassistant/sensor/mousewhisker_") + String(uniqueId) + "/boot_count/config";
+    String bootSensor = "{";
+    bootSensor += "\"name\": \"Boot Count\",";
+    bootSensor += "\"object_id\": \"mousewhisker_" + String(uniqueId) + "_boot_count\",";
+    bootSensor += "\"state_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    bootSensor += "\"value_template\": \"{{ value_json.boot_count }}\",";
+    bootSensor += "\"state_class\": \"total_increasing\",";
+    bootSensor += "\"entity_category\": \"diagnostic\",";
+    bootSensor += "\"availability_topic\": \"" + MQTT_TOPIC_AVAILABILITY + "\",";
+    bootSensor += "\"icon\": \"mdi:counter\",";
+    bootSensor += "\"unique_id\": \"" + baseId + "_boot_count\",";
+    bootSensor += "\"device\": " + deviceShort + "}";
+    mqttClient.publish(bootTopic.c_str(), bootSensor.c_str(), true);
+    yieldAndProcess("bootCount");
+
+    // Last reset reason sensor
+    String resetTopic = String("homeassistant/sensor/mousewhisker_") + String(uniqueId) + "/reset_reason/config";
+    String resetSensor = "{";
+    resetSensor += "\"name\": \"Last Reset Reason\",";
+    resetSensor += "\"object_id\": \"mousewhisker_" + String(uniqueId) + "_reset_reason\",";
+    resetSensor += "\"state_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    resetSensor += "\"value_template\": \"{{ value_json.reset_reason }}\",";
+    resetSensor += "\"entity_category\": \"diagnostic\",";
+    resetSensor += "\"availability_topic\": \"" + MQTT_TOPIC_AVAILABILITY + "\",";
+    resetSensor += "\"icon\": \"mdi:restart-alert\",";
+    resetSensor += "\"unique_id\": \"" + baseId + "_reset_reason\",";
+    resetSensor += "\"device\": " + deviceShort + "}";
+    mqttClient.publish(resetTopic.c_str(), resetSensor.c_str(), true);
+    yieldAndProcess("resetReason");
+
+    // WiFi disconnect count sensor (this session)
+    String wifiDiscTopic = String("homeassistant/sensor/mousewhisker_") + String(uniqueId) + "/wifi_disconnects/config";
+    String wifiDiscSensor = "{";
+    wifiDiscSensor += "\"name\": \"WiFi Disconnects\",";
+    wifiDiscSensor += "\"object_id\": \"mousewhisker_" + String(uniqueId) + "_wifi_disconnects\",";
+    wifiDiscSensor += "\"state_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    wifiDiscSensor += "\"value_template\": \"{{ value_json.wifi_disconnects }}\",";
+    wifiDiscSensor += "\"state_class\": \"total_increasing\",";
+    wifiDiscSensor += "\"entity_category\": \"diagnostic\",";
+    wifiDiscSensor += "\"availability_topic\": \"" + MQTT_TOPIC_AVAILABILITY + "\",";
+    wifiDiscSensor += "\"icon\": \"mdi:wifi-off\",";
+    wifiDiscSensor += "\"unique_id\": \"" + baseId + "_wifi_disconnects\",";
+    wifiDiscSensor += "\"device\": " + deviceShort + "}";
+    mqttClient.publish(wifiDiscTopic.c_str(), wifiDiscSensor.c_str(), true);
+    yieldAndProcess("wifiDisconnects");
+
+    // MQTT disconnect count sensor (this session)
+    String mqttDiscTopic = String("homeassistant/sensor/mousewhisker_") + String(uniqueId) + "/mqtt_disconnects/config";
+    String mqttDiscSensor = "{";
+    mqttDiscSensor += "\"name\": \"MQTT Disconnects\",";
+    mqttDiscSensor += "\"object_id\": \"mousewhisker_" + String(uniqueId) + "_mqtt_disconnects\",";
+    mqttDiscSensor += "\"state_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    mqttDiscSensor += "\"value_template\": \"{{ value_json.mqtt_disconnects }}\",";
+    mqttDiscSensor += "\"state_class\": \"total_increasing\",";
+    mqttDiscSensor += "\"entity_category\": \"diagnostic\",";
+    mqttDiscSensor += "\"availability_topic\": \"" + MQTT_TOPIC_AVAILABILITY + "\",";
+    mqttDiscSensor += "\"icon\": \"mdi:connection\",";
+    mqttDiscSensor += "\"unique_id\": \"" + baseId + "_mqtt_disconnects\",";
+    mqttDiscSensor += "\"device\": " + deviceShort + "}";
+    mqttClient.publish(mqttDiscTopic.c_str(), mqttDiscSensor.c_str(), true);
+    yieldAndProcess("mqttDisconnects");
+
+    // Free heap memory sensor
+    String heapTopic = String("homeassistant/sensor/mousewhisker_") + String(uniqueId) + "/free_heap/config";
+    String heapSensor = "{";
+    heapSensor += "\"name\": \"Free Heap\",";
+    heapSensor += "\"object_id\": \"mousewhisker_" + String(uniqueId) + "_free_heap\",";
+    heapSensor += "\"state_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    heapSensor += "\"value_template\": \"{{ value_json.free_heap }}\",";
+    heapSensor += "\"json_attributes_topic\": \"" + MQTT_TOPIC_DIAG + "\",";
+    heapSensor += "\"json_attributes_template\": \"{ \\\"min_free_heap\\\": {{ value_json.min_free_heap }} }\",";
+    heapSensor += "\"unit_of_measurement\": \"B\",";
+    heapSensor += "\"entity_category\": \"diagnostic\",";
+    heapSensor += "\"availability_topic\": \"" + MQTT_TOPIC_AVAILABILITY + "\",";
+    heapSensor += "\"icon\": \"mdi:memory\",";
+    heapSensor += "\"unique_id\": \"" + baseId + "_free_heap\",";
+    heapSensor += "\"device\": " + deviceShort + "}";
+    mqttClient.publish(heapTopic.c_str(), heapSensor.c_str(), true);
+    yieldAndProcess("freeHeap");
     
     Serial.println("Home Assistant discovery complete");
   }
@@ -999,24 +1189,21 @@
     }
 
     if (t == MQTT_TOPIC_CMD_REBOOT) {
-      Serial.println("Reboot command received via MQTT");
+      Serial.println("Reboot via MQTT");
       publishEventJSON("reboot", "rebooting");
-      delay(500);  // Brief delay to allow MQTT message to send
+      delay(500);
       ESP.restart();
       return;
     }
 
     if (t == MQTT_TOPIC_CMD_FACTORY_RESET) {
-      Serial.println("\n!!! FACTORY RESET command received via MQTT !!!");
-      Serial.println("Clearing all preferences...");
+      Serial.println("FACTORY RESET");
       publishEventJSON("factory_reset", "resetting");
-      mqttClient.loop();  // Process outgoing MQTT
+      mqttClient.loop();
       delay(100);
-      mqttClient.loop();  // Ensure it's sent
+      mqttClient.loop();
       preferences.clear();
-      preferences.end();  // Properly close preferences to flush to flash
-      Serial.println("Preferences cleared. Rebooting...");
-      Serial.flush();  // Ensure serial output completes
+      preferences.end();
       delay(200);
       ESP.restart();
       return;
@@ -1026,7 +1213,7 @@
       int v = msg.toInt();
       if (v >= 0 && v <= 127) {
         if (v != xRange) {
-          Serial.printf("[MQTT] X Range: %d -> %d (saved to preferences)\n", xRange, v);
+          Serial.printf("[MQTT] xRange: %d->%d\n", xRange, v);
           xRange = v;
           preferences.putInt("xrange", xRange);
         }
@@ -1040,7 +1227,7 @@
       int v = msg.toInt();
       if (v >= 0 && v <= 127) {
         if (v != yRange) {
-          Serial.printf("[MQTT] Y Range: %d -> %d (saved to preferences)\n", yRange, v);
+          Serial.printf("[MQTT] yRange: %d->%d\n", yRange, v);
           yRange = v;
           preferences.putInt("yrange", yRange);
         }
@@ -1054,12 +1241,12 @@
       int v = msg.toInt();
       if (v >= ALLOWED_MIN_MOVE_SECONDS && v <= ALLOWED_MAX_MOVE_SECONDS) {
         if (v != minMoveInterval) {
-          Serial.printf("[MQTT] Min Interval: %d -> %d (saved to preferences)\n", minMoveInterval, v);
+          Serial.printf("[MQTT] minInt: %d->%d\n", minMoveInterval, v);
           minMoveInterval = v;
           preferences.putInt("minmove", minMoveInterval);
         }
         if (minMoveInterval > maxMoveInterval) {
-          Serial.printf("[MQTT] Max Interval adjusted: %d -> %d (min > max)\n", maxMoveInterval, minMoveInterval);
+          Serial.printf("[MQTT] maxInt adjusted: %d->%d\n", maxMoveInterval, minMoveInterval);
           maxMoveInterval = minMoveInterval;
           preferences.putInt("maxmove", maxMoveInterval);
         }
@@ -1075,12 +1262,12 @@
       int v = msg.toInt();
       if (v >= ALLOWED_MIN_MOVE_SECONDS && v <= ALLOWED_MAX_MOVE_SECONDS) {
         if (v != maxMoveInterval) {
-          Serial.printf("[MQTT] Max Interval: %d -> %d (saved to preferences)\n", maxMoveInterval, v);
+          Serial.printf("[MQTT] maxInt: %d->%d\n", maxMoveInterval, v);
           maxMoveInterval = v;
           preferences.putInt("maxmove", maxMoveInterval);
         }
         if (maxMoveInterval < minMoveInterval) {
-          Serial.printf("[MQTT] Min Interval adjusted: %d -> %d (max < min)\n", minMoveInterval, maxMoveInterval);
+          Serial.printf("[MQTT] minInt adjusted: %d->%d\n", minMoveInterval, maxMoveInterval);
           minMoveInterval = maxMoveInterval;
           preferences.putInt("minmove", minMoveInterval);
         }
@@ -1102,30 +1289,17 @@
         String inputClean = sanitizeDeviceName(msg, 255);  // Get full sanitized version
         bool wasTruncated = (inputClean.length() > clean.length());
         
-        if (wasTruncated) {
-          // Log truncation to serial (name was too long for BLE advertising limit)
-          Serial.printf("Device name truncated: '%s' -> '%s' (max %d chars%s)\n", 
-                        inputClean.c_str(), clean.c_str(), nameMaxLen,
-                        appendUniqueId ? " with ID suffix" : "");
-        }
-        
         if (clean != deviceName) {
-          String oldName = deviceName;  // Store old name for logging
+          Serial.printf("Name: '%s'->'%s'\n", deviceName.c_str(), clean.c_str());
           deviceName = clean;
           preferences.putString("devname", deviceName);
           #if ENABLE_USB
             USB.productName(deviceName.c_str());
           #endif
-          
           publishEventJSON("name_set", deviceName);
           publishConfigJSON();
-          // Note: BLE name is set at init time and requires reboot to update
-          Serial.printf("Device name changed: '%s' -> '%s'. Reboot required to apply to BLE advertising.\n",
-                        oldName.c_str(), deviceName.c_str());
         } else if (wasTruncated) {
-          // Name was truncated but result equals current name - still publish to update HA text box
-          Serial.printf("Device name unchanged (truncated input matches current name '%s')\n", deviceName.c_str());
-          publishConfigJSON();  // Send truncated value back to HA
+          publishConfigJSON();
         }
       }
       return;
@@ -1134,14 +1308,11 @@
     if (t == MQTT_TOPIC_SET_APPENDID) {
       bool newVal = (msg == "1" || msg.equalsIgnoreCase("on"));
       if (newVal != appendUniqueId) {
-        bool oldVal = appendUniqueId;  // Store old value for logging
+        Serial.printf("AppendID: %d->%d\n", appendUniqueId, newVal);
         appendUniqueId = newVal;
         preferences.putBool("appendid", appendUniqueId);
         publishEventJSON("appendid_set", String(appendUniqueId ? "true" : "false"));
         publishConfigJSON();
-        // Note: Changing this requires reboot to update USB/BLE mouse name
-        Serial.printf("Append Unique ID changed: %s -> %s. Reboot required to apply to mouse name.\n",
-                      oldVal ? "true" : "false", appendUniqueId ? "true" : "false");
       }
       return;
     }
@@ -1150,7 +1321,7 @@
     if (t == MQTT_TOPIC_SET_LED) {
       bool newVal = (msg == "1" || msg.equalsIgnoreCase("on"));
       if (newVal != ledEnabled) {
-        Serial.printf("[MQTT] LED Enabled: %s -> %s (saved to preferences)\n", ledEnabled ? "true" : "false", newVal ? "true" : "false");
+        Serial.printf("[MQTT] LED: %d->%d\n", ledEnabled, newVal);
         ledEnabled = newVal;
         preferences.putBool("ledEnabled", ledEnabled);
         publishEventJSON("led_set", String(ledEnabled ? "true" : "false"));
@@ -1160,6 +1331,27 @@
     }
     #endif
 
+    // Diagnostics enable/disable
+    if (t == MQTT_TOPIC_SET_DIAG) {
+      bool newVal = (msg == "1" || msg.equalsIgnoreCase("on"));
+      if (newVal != diagnosticsEnabled) {
+        Serial.printf("[MQTT] Diag: %d->%d\n", diagnosticsEnabled, newVal);
+        diagnosticsEnabled = newVal;
+        preferences.putBool("diagEnabled", diagnosticsEnabled);
+        
+        // If just enabled, increment boot count now (since we skipped it at boot)
+        if (diagnosticsEnabled && bootCount == preferences.getULong("bootCount", 0)) {
+          bootCount++;
+          preferences.putULong("bootCount", bootCount);
+          Serial.printf("  Boot count incremented to %lu\n", bootCount);
+        }
+        
+        publishEventJSON("diagnostics_set", String(diagnosticsEnabled ? "true" : "false"));
+        publishDiagnosticsJSON();  // Publish immediately so HA updates
+      }
+      return;
+    }
+
     // fallback: legacy single cmd topic
     if (t == MQTT_TOPIC_CMD) {
       handleSetCommand(msg);
@@ -1168,9 +1360,35 @@
   #endif // ENABLE_MQTT
 
   #if ENABLE_WIFI
+  // Event handler when client connects to AP
+  void onWiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
+    Serial.printf("[WiFi] Client connected to AP (MAC: %02X:%02X:%02X:%02X:%02X:%02X)\n",
+      info.wifi_ap_staconnected.mac[0], info.wifi_ap_staconnected.mac[1],
+      info.wifi_ap_staconnected.mac[2], info.wifi_ap_staconnected.mac[3],
+      info.wifi_ap_staconnected.mac[4], info.wifi_ap_staconnected.mac[5]);
+  }
+  
+  // Event handler to reset captive portal when client disconnects
+  void onWiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (wifiAPMode) {
+      // Convert MAC to IP isn't straightforward, so just clear all tracked IPs
+      // This is fine since disconnects are infrequent
+      captivePortalFirstSeen.clear();
+      Serial.printf("[WiFi] Client disconnected from AP (MAC: %02X:%02X:%02X:%02X:%02X:%02X)\n",
+        info.wifi_ap_stadisconnected.mac[0], info.wifi_ap_stadisconnected.mac[1],
+        info.wifi_ap_stadisconnected.mac[2], info.wifi_ap_stadisconnected.mac[3],
+        info.wifi_ap_stadisconnected.mac[4], info.wifi_ap_stadisconnected.mac[5]);
+      Serial.println("[Captive] Portal reset for next connection");
+    }
+  }
+
   void startAPMode() {
     Serial.println("Starting WiFi AP mode for configuration...");
     WiFi.mode(WIFI_AP);
+    
+    // Register event handlers for client connect/disconnect
+    WiFi.onEvent(onWiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+    WiFi.onEvent(onWiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
     
     // Use fixed AP SSID based on device ID (consistent, doesn't change with device name)
     String apSSID = "Mouse Whisker " + String(uniqueId);
@@ -1208,6 +1426,8 @@
     }
     
     WiFi.mode(WIFI_STA);
+    WiFi.persistent(false);  // Don't save to flash during connection attempts
+    WiFi.setAutoReconnect(false);  // We handle reconnection ourselves in loop()
     WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);  // Helps with hidden networks
     WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
     
@@ -1215,11 +1435,20 @@
     Serial.printf("WiFi credentials: SSID='%s' (len=%d), Pass len=%d\n", 
                   wifiSSID.c_str(), wifiSSID.length(), wifiPassword.length());
     
-    // Try up to 3 times before giving up
-    for (int attempt = 1; attempt <= 3; attempt++) {
+    // Start with normal attempts, may switch to hidden mode if detected
+    bool hiddenMode = false;
+    int maxAttempts = 3;
+    int timeout = 15000;
+    int retryDelay = 100;
+    
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Clean disconnect before each attempt (helps with hidden SSIDs)
+      WiFi.disconnect(true);  // true = also clear stored credentials
+      delay(hiddenMode ? 500 : 100);  // Longer delay for hidden SSIDs
+      
       // Use extended begin() with channel=0, bssid=NULL, connect=true for hidden SSID support
       WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str(), 0, NULL, true);
-      Serial.printf("Connecting to WiFi '%s' (attempt %d/3)", wifiSSID.c_str(), attempt);
+      Serial.printf("Connecting to WiFi '%s' (attempt %d/%d)%s", wifiSSID.c_str(), attempt, maxAttempts, hiddenMode ? " [hidden mode]" : "");
       
       unsigned long start = millis();
       unsigned long lastDot = 0;
@@ -1231,7 +1460,7 @@
           lastDot = millis();
           Serial.print(".");
         }
-        if (millis() - start > 10000) break; // timeout (10s per attempt)
+        if (millis() - start > timeout) break;
       }
       Serial.println();
       
@@ -1258,28 +1487,53 @@
         status == WL_CONNECTION_LOST ? "CONNECTION_LOST" :
         "UNKNOWN");
       
-      // On first failure, scan for networks to help diagnose
+      // On first failure, scan for networks to help diagnose and detect hidden SSID situation
       if (attempt == 1) {
         Serial.println("Scanning for networks to diagnose...");
+        WiFi.disconnect();  // Ensure radio is idle before scanning
+        delay(100);
         int n = WiFi.scanNetworks(false, true);  // false=async off, true=show hidden
-        Serial.printf("  Found %d networks:\n", n);
-        bool foundTarget = false;
-        for (int i = 0; i < n && i < 10; i++) {
-          String ssid = WiFi.SSID(i);
-          bool hidden = ssid.length() == 0;
-          Serial.printf("    %d: '%s' (%d dBm) ch%d %s%s\n", 
-                        i+1, 
-                        hidden ? "(hidden)" : ssid.c_str(),
-                        WiFi.RSSI(i),
-                        WiFi.channel(i),
-                        WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "open" : "encrypted",
-                        (ssid == wifiSSID) ? " <-- TARGET" : "");
-          if (ssid == wifiSSID) foundTarget = true;
+        if (n < 0) {
+          // Scan failed, retry once after brief delay
+          Serial.printf("  Scan failed (error %d), retrying...\n", n);
+          delay(500);
+          n = WiFi.scanNetworks(false, true);
+        }
+        if (n < 0) {
+          Serial.printf("  Scan failed (error %d)\n", n);
+        } else if (n == 0) {
+          Serial.println("  No networks found");
+        } else {
+          Serial.printf("  Found %d networks:\n", n);
+          bool foundTarget = false;
+          int hiddenCount = 0;
+          for (int i = 0; i < n && i < 10; i++) {
+            String ssid = WiFi.SSID(i);
+            bool hidden = ssid.length() == 0;
+            if (hidden) hiddenCount++;
+            Serial.printf("    %d: '%s' (%d dBm) ch%d %s%s\n", 
+                          i+1, 
+                          hidden ? "(hidden)" : ssid.c_str(),
+                          WiFi.RSSI(i),
+                          WiFi.channel(i),
+                          WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "open" : "encrypted",
+                          (ssid == wifiSSID) ? " <-- TARGET" : "");
+            if (ssid == wifiSSID) foundTarget = true;
+          }
+          
+          // Auto-detect hidden SSID: target not found in scan but hidden networks exist
+          if (!foundTarget && hiddenCount > 0 && status == WL_NO_SSID_AVAIL && !hiddenMode) {
+            Serial.printf("  Auto-detected hidden SSID scenario (found %d hidden network%s)\n", 
+                          hiddenCount, hiddenCount > 1 ? "s" : "");
+            Serial.println("  Switching to hidden SSID mode with extended timeouts...");
+            hiddenMode = true;
+            maxAttempts = 5;  // More attempts for hidden networks
+            timeout = 20000;  // Longer timeout
+          } else if (!foundTarget) {
+            Serial.println("  WARNING: Target SSID not found in scan (may be hidden or out of range)");
+          }
         }
         WiFi.scanDelete();
-        if (!foundTarget) {
-          Serial.println("  WARNING: Target SSID not found in scan (may be hidden or out of range)");
-        }
       }
       
       // Brief pause before retry
@@ -1301,8 +1555,8 @@
     
     Serial.printf("Attempting WiFi connection to '%s' from AP mode...\n", wifiSSID.c_str());
     
-    // Temporarily switch to STA mode to try connecting
-    WiFi.mode(WIFI_STA);
+    // Use AP+STA mode to keep AP running while attempting connection
+    WiFi.mode(WIFI_AP_STA);
     WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str(), 0, NULL, true);  // Hidden SSID support
     
     unsigned long start = millis();
@@ -1314,7 +1568,9 @@
     }
     
     if (WiFi.status() == WL_CONNECTED) {
+      // Success! Switch to STA-only mode (stop AP)
       wifiAPMode = false;
+      WiFi.mode(WIFI_STA);
       Serial.println("WiFi connected! Switching from AP mode.");
       Serial.printf("  IP Address: %s\n", WiFi.localIP().toString().c_str());
       #if ENABLE_LED
@@ -1323,10 +1579,10 @@
       return true;
     }
     
-    // Failed - go back to AP mode
+    // Failed - go back to AP-only mode
     Serial.println("  WiFi still unavailable, staying in AP mode");
     WiFi.disconnect();
-    startAPMode();
+    WiFi.mode(WIFI_AP);
     return false;
   }
   #endif // ENABLE_WIFI
@@ -1370,6 +1626,7 @@
       mqttClient.subscribe(MQTT_TOPIC_CMD_WHISK.c_str());
       mqttClient.subscribe(MQTT_TOPIC_CMD_REBOOT.c_str());
       mqttClient.subscribe(MQTT_TOPIC_CMD_FACTORY_RESET.c_str());
+      mqttClient.subscribe(MQTT_TOPIC_SET_DIAG.c_str());  // Diagnostics enable/disable
       // publish availability online
       mqttClient.publish(MQTT_TOPIC_AVAILABILITY.c_str(), "online", true);
       publishDiscovery();
@@ -1389,6 +1646,8 @@
       #if ENABLE_LED
         ledBlink(3, 80); // 3 rapid taps for MQTT connected
       #endif
+      // Publish initial diagnostics
+      publishDiagnosticsJSON();
       // Re-print settings to serial now that connection is stable
       Serial.println("\n--- Settings (post-connect) ---");
       printSettingsToSerial();
@@ -1406,22 +1665,27 @@
     String html = F("<!DOCTYPE html><html><head>"
       "<meta name='viewport' content='width=device-width,initial-scale=1'>"
       "<title>Mouse Whisker</title>"
-      "<style>body{font-family:sans-serif;max-width:480px;margin:20px auto;padding:10px;font-size:16px;}"
+      "<style>body{font-family:sans-serif;max-width:480px;margin:20px auto;padding:10px;}"
       "h2{color:#333;}h3{margin-top:20px;margin-bottom:10px;}"
-      "input[type=text],input[type=password],input[type=number]{font-size:16px;padding:10px;border:1px solid #ccc;border-radius:4px;}"
+      "input[type=text],input[type=password],input[type=number]{padding:10px;border:1px solid #ccc;border-radius:4px;font-size:16px;}"
       "input[type=text],input[type=password]{width:100%;max-width:280px;box-sizing:border-box;}"
-      "input[type=number]{width:80px;}"
-      "input[type=checkbox]{width:20px;height:20px;margin-right:8px;vertical-align:middle;}"
+      "input[type=number]{width:80px;}input[type=checkbox]{width:20px;height:20px;margin-right:8px;}"
       "label{display:block;margin:8px 0;}"
-      ".btn{display:inline-block;padding:14px 28px;margin:5px;background:#007bff;color:#fff;text-decoration:none;border-radius:6px;font-size:16px;border:none;cursor:pointer;}"
+      ".btn{display:inline-block;padding:14px 28px;margin:5px;background:#007bff;color:#fff;text-decoration:none;border-radius:6px;border:none;cursor:pointer;font-size:16px;}"
       ".btn:hover{background:#0056b3;}.status{padding:10px;margin:10px 0;border-radius:4px;}"
       ".on{background:#d4edda;color:#155724;}.off{background:#f8d7da;color:#721c24;}"
       ".wait{background:#fff3cd;color:#856404;}.disabled{background:#e2e3e5;color:#6c757d;}"
-      ".tight{margin:4px 0;}"
-      ".group{background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:12px;margin:15px 0;}"
-      ".group-title{font-weight:bold;margin-bottom:8px;}"
-      "details{margin:10px 0;}summary{cursor:pointer;padding:8px 0;font-weight:bold;color:#007bff;}"
-      "summary:hover{text-decoration:underline;}details[open] summary{margin-bottom:10px;}"
+      ".tight{margin:4px 0;}.group{background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:12px;margin:15px 0;}"
+      ".group-title{font-weight:bold;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;}"
+      ".group-status{font-size:13px;font-weight:normal;padding:4px 10px;border-radius:4px;}"
+      ".group-status.on{color:#155724;background:#d4edda;}.group-status.off{color:#721c24;background:#f8d7da;}.group-status.wait{color:#856404;background:#fff3cd;}"
+      "details{margin:10px 0;}summary{cursor:pointer;padding:8px 0;color:#007bff;}"
+      "summary:hover{text-decoration:underline;}"
+      ".diag-table{width:100%;border-collapse:collapse;margin:10px 0;}.diag-table td{padding:6px 8px;border-bottom:1px solid #dee2e6;}"
+      ".diag-table td:first-child{color:#666;width:45%;}"
+      ".help-box{margin:10px 0;background:#f0f7ff;border:1px solid #cce5ff;border-radius:6px;padding:0 12px;}"
+      ".help-box summary{font-size:13px;color:#004085;}.help-content{font-size:12px;color:#444;}"
+      ".help-content p{margin:6px 0;}"
       "</style></head><body>");
     
     // Show full name (with ID suffix if enabled)
@@ -1477,36 +1741,38 @@
     html += "<p><label><input type='checkbox' name='led' " + String(ledEnabled ? "checked" : "") + "> Status LED</label></p>";
     #endif
     html += F("<p><input type='submit' class='btn' value='Save Settings'></p>");
-    html += "</form>";
+    html += "</form><hr>";
     
-    // WiFi Configuration section (separate form)
+    // WiFi Configuration section
     #if ENABLE_WIFI
-    html += F("<hr><h3>WiFi</h3>");
+    html += F("<div class='group'>");
+    html += F("<div class='group-title'>WiFi <span id='wifiStatusText' class='group-status ");
     if (wifiAPMode) {
-      html += F("<div class='status wait'><b>Mode:</b> AP (Configuration Mode)</div>");
+      html += F("wait'>AP Mode</span></div>");
     } else {
-      html += "<div class='status on'><b>Connected to:</b> " + wifiSSID + "</div>";
+      html += "on'>Connected to " + wifiSSID + "</span></div>";
     }
-    html += F("<details><summary>Configure WiFi</summary>");
+    html += F("<details><summary>Configure</summary>");
     html += F("<form method='POST' action='/wifi'>");
     html += "<p><label>SSID: <input type='text' name='ssid' value='" + wifiSSID + "' maxlength='32'></label></p>";
     html += F("<p><label>Password: <input type='password' name='pass' id='wifiPass' maxlength='64'></label>");
     html += F(" <label class='tight'><input type='checkbox' onclick='togglePass(\"wifiPass\")'> Show</label></p>");
     html += F("<p><input type='submit' class='btn' value='Save WiFi'></p>");
-    html += F("</form></details>");
+    html += F("</form></details></div>");
     #endif
     
-    // MQTT Configuration section (separate form)
+    // MQTT Configuration section
     #if ENABLE_MQTT
-    html += F("<hr><h3>MQTT</h3>");
+    html += F("<div class='group'>");
+    html += F("<div class='group-title'>MQTT <span id='mqttStatusText' class='group-status ");
     if (mqttServer.length() == 0) {
-      html += F("<div class='status wait'><b>Status:</b> Not configured</div>");
+      html += F("wait'>Not configured</span></div>");
     } else if (mqttClient.connected()) {
-      html += "<div class='status on'><b>Connected to:</b> " + mqttServer + ":" + String(mqttPort) + "</div>";
+      html += "on'>Connected to " + mqttServer + "</span></div>";
     } else {
-      html += "<div class='status off'><b>Disconnected:</b> " + mqttServer + ":" + String(mqttPort) + "</div>";
+      html += "off'>Disconnected</span></div>";
     }
-    html += F("<details><summary>Configure MQTT</summary>");
+    html += F("<details><summary>Configure</summary>");
     html += F("<form method='POST' action='/mqtt'>");
     html += "<p><label>Server: <input type='text' name='server' value='" + mqttServer + "' maxlength='64' placeholder='192.168.1.100 or hostname'></label></p>";
     html += "<p><label>Port: <input type='number' name='port' value='" + String(mqttPort) + "' min='1' max='65535'></label></p>";
@@ -1514,10 +1780,43 @@
     html += F("<p><label>Password: <input type='password' name='pass' id='mqttPass' maxlength='64'></label>");
     html += F(" <label class='tight'><input type='checkbox' onclick='togglePass(\"mqttPass\")'> Show</label></p>");
     html += F("<p><input type='submit' class='btn' value='Save MQTT'></p>");
-    html += F("</form></details>");
+    html += F("</form></details></div>");
+    
+    // Diagnostics section
+    html += F("<div class='group'>");
+    html += F("<div class='group-title'>Diagnostics <span id='diagStatusText' class='group-status ");
+    html += String(diagnosticsEnabled ? "on'>Enabled" : "wait'>Disabled") + "</span></div>";
+    html += F("<details><summary>View &amp; Configure</summary>");
+    html += F("<form method='POST' action='/diag'>");
+    html += "<p><label><input type='checkbox' name='enabled' id='diagEnabled' " + String(diagnosticsEnabled ? "checked" : "") + "> Enable Diagnostics</label></p>";
+    html += F("<p><small><i>When enabled, boot count is persisted to flash. Disable to minimize flash wear.</i></small></p>");
+    html += F("<p><input type='submit' class='btn' value='Save'></p>");
+    html += F("</form>");
+    html += F("<table class='diag-table'>");
+    html += "<tr><td>Uptime:</td><td id='diagUptime'>" + getUptimeString() + "</td></tr>";
+    html += "<tr><td>Boot Count:</td><td id='diagBootCount'>" + String(bootCount) + "</td></tr>";
+    html += "<tr><td>Reset Reason:</td><td id='diagResetReason'>" + getResetReason() + "</td></tr>";
+    html += "<tr><td>WiFi Disconnects:</td><td id='diagWifiDisc'>" + String(wifiDisconnectCount) + "</td></tr>";
+    html += "<tr><td>MQTT Disconnects:</td><td id='diagMqttDisc'>" + String(mqttDisconnectCount) + "</td></tr>";
+    int rssi = WiFi.RSSI();
+    String quality = (rssi >= -50) ? "Excellent" : (rssi >= -60) ? "Good" : (rssi >= -70) ? "Fair" : "Weak";
+    html += "<tr><td>WiFi Signal:</td><td id='diagRssi'>" + String(rssi) + " dBm (" + quality + ")</td></tr>";
+    html += "<tr><td>Free Heap:</td><td id='diagHeap'>" + String(ESP.getFreeHeap() / 1024) + " KB</td></tr>";
+    html += F("</table>");
+    html += F("<details class='help-box'><summary>How to interpret these values</summary>"
+      "<div class='help-content'>"
+      "<p><b>Uptime</b> resets on every reboot. If Home Assistant showed unavailable but uptime is high, "
+      "the issue was likely network-related, not a crash.</p>"
+      "<p><b>Boot Count</b> increments each start. Unexpected increases indicate crashes or power issues.</p>"
+      "<p><b>Reset Reason</b> shows why the last reboot occurred. "
+      "<i>Watchdog</i> or <i>Panic</i> = crash. <i>Brownout</i> = power issue.</p>"
+      "<p><b>WiFi/MQTT Disconnects</b> count reconnections this session. High counts suggest network instability.</p>"
+      "<p><b>WiFi Signal</b> (RSSI): -30 to -50 Excellent, -50 to -65 Good, -65 to -80 Weak, below -80 Poor.</p>"
+      "<p><b>Free Heap</b> is available memory. Below 20 KB may cause instability.</p>"
+      "</div></details></details></div>");
     #endif
     
-    html += "<hr><p><small>Mouse Whiskerv" + String(FIRMWARE_VERSION) + " by Shannon Fritz | <a href='/reboot'>Reboot</a></small></p>";
+    html += "<hr><p><small>Mouse Whisker v" + String(FIRMWARE_VERSION) + " by Shannon Fritz | <a href='/reboot'>Reboot</a> | <a href='/reset'>Reset</a> | <a href='/firmware'>Update</a></small></p>";
     
     // JavaScript for dynamic status updates (polls every 3 seconds)
     html += F("<script>"
@@ -1538,6 +1837,17 @@
           "document.querySelector('[name=maxint]').value=d.maxInt;"
           "document.querySelector('[name=xrange]').value=d.xRange;"
           "document.querySelector('[name=yrange]').value=d.yRange;"
+          "var ds=document.getElementById('diagStatusText');if(ds){"
+            "ds.textContent=d.diagEnabled?'Enabled':'Disabled';"
+            "ds.className='group-status '+(d.diagEnabled?'on':'wait');"
+            "document.getElementById('diagEnabled').checked=d.diagEnabled;"
+            "document.getElementById('diagUptime').textContent=d.uptime;"
+            "document.getElementById('diagBootCount').textContent=d.bootCount;"
+            "document.getElementById('diagWifiDisc').textContent=d.wifiDisc;"
+            "document.getElementById('diagMqttDisc').textContent=d.mqttDisc;"
+            "document.getElementById('diagRssi').textContent=d.rssi+' dBm ('+d.wifiQuality+')';"
+            "document.getElementById('diagHeap').textContent=d.heap+' KB';"
+          "}"
         "}).catch(()=>{});"
       "},3000);");
     // Live preview for mouse name (separate to inject uniqueId)
@@ -1575,32 +1885,40 @@
     #if ENABLE_USB
     json += ",\"usb\":" + String(USB ? "true" : "false");
     #endif
+    #if ENABLE_MQTT
+    // Diagnostics data
+    json += ",\"diagEnabled\":" + String(diagnosticsEnabled ? "true" : "false");
+    json += ",\"uptime\":\"" + getUptimeString() + "\"";
+    json += ",\"bootCount\":" + String(bootCount);
+    json += ",\"resetReason\":\"" + getResetReason() + "\"";
+    json += ",\"wifiDisc\":" + String(wifiDisconnectCount);
+    json += ",\"mqttDisc\":" + String(mqttDisconnectCount);
+    int statusRssi = WiFi.RSSI();
+    String statusQuality = (statusRssi >= -50) ? "Excellent" : (statusRssi >= -60) ? "Good" : (statusRssi >= -70) ? "Fair" : "Weak";
+    json += ",\"rssi\":" + String(statusRssi);
+    json += ",\"wifiQuality\":\"" + statusQuality + "\"";
+    json += ",\"heap\":" + String(ESP.getFreeHeap() / 1024);
+    #endif
     json += "}";
     webServer.send(200, "application/json", json);
   }
 
   void handleWebRoot() {
     if (wifiAPMode) {
-      // In AP mode, show simple captive portal landing page
-      Serial.printf("[Captive] Landing page accessed from %s\n", webServer.client().remoteIP().toString().c_str());
-      if (!portalPageSeen) {
-        portalPageSeen = true;
-        Serial.println("[Captive] Portal landing seen - next captive check will return Success");
-      }
-      // Simple landing page - just a button to open setup in Safari
+      // In AP mode, show captive portal landing page
+      String clientIP = webServer.client().remoteIP().toString();
+      Serial.printf("[Captive] Landing page accessed from %s\n", clientIP.c_str());
+      captivePortalFirstSeen[clientIP] = 0;  // Mark complete
       webServer.send(200, "text/html", F(
-        "<!DOCTYPE html><html><head>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Mouse Whisker Setup</title>"
-        "</head><body style='font-family:sans-serif;text-align:center;padding:40px 20px;'>"
-        "<h2 style='font-size:28px;'>Mouse Whisker</h2>"
-        "<p style='font-size:18px;'>Welcome! Tap the button below to configure your device.</p>"
-        "<p style='margin-top:40px;'><a href='http://192.168.4.1/setup' style='"
-        "display:block;width:80%;max-width:280px;margin:0 auto;padding:24px 20px;"
-        "background:#007bff;color:#fff;text-decoration:none;border-radius:12px;font-size:24px;"
-        "'>Open Setup</a></p>"
-        "</body></html>"));
-    } else {
+        "<HTML><HEAD><TITLE>Mouse Whisker</TITLE></HEAD>"
+        "<BODY style='font-family:-apple-system,sans-serif;text-align:center;padding:40px 20px;margin:0;background:#f8f9fa;'>"
+        "<div style='max-width:320px;margin:0 auto;background:#fff;padding:30px;border-radius:16px;box-shadow:0 2px 10px rgba(0,0,0,0.1);'>"
+        "<h2 style='font-size:24px;margin:0 0 16px;color:#333;'>&#128433; Mouse Whisker</h2>"
+        "<p style='font-size:16px;color:#666;margin:0 0 24px;'>Connected! Tap below to configure.</p>"
+        "<a style='display:block;padding:16px 24px;background:#007bff;color:#fff;text-decoration:none;border-radius:10px;font-size:18px;font-weight:500;' href='http://192.168.4.1/setup'>Open Setup</a>"
+        "</div>"
+        "</BODY></HTML>"));
+        } else {
       // In station mode, redirect to /setup
       webServer.sendHeader("Location", "/setup");
       webServer.send(302);
@@ -1620,7 +1938,7 @@
   }
 
   void handleWebUpdate() {
-    Serial.printf("[WebUI] Settings updated from %s\n", webServer.client().remoteIP().toString().c_str());
+    Serial.println("[Web] Settings update");
     bool needsReboot = false;
     
     // Mouse Name (requires reboot)
@@ -1629,7 +1947,7 @@
       size_t maxLen = appendUniqueId ? 24 : 29;
       newName = sanitizeDeviceName(newName, maxLen);
       if (newName != deviceName) {
-        Serial.printf("[WebUI] Mouse Name: '%s' -> '%s' (reboot required)\n", deviceName.c_str(), newName.c_str());
+        Serial.printf("[Web] Name: '%s'->'%s'\n", deviceName.c_str(), newName.c_str());
         deviceName = newName;
         preferences.putString("devname", deviceName);
         needsReboot = true;
@@ -1639,7 +1957,7 @@
     // Append ID (requires reboot)
     bool newAppendId = webServer.hasArg("appendid");
     if (newAppendId != appendUniqueId) {
-      Serial.printf("[WebUI] Append ID: %s -> %s (reboot required)\n", appendUniqueId ? "on" : "off", newAppendId ? "on" : "off");
+      Serial.printf("[Web] AppendID: %d->%d\n", appendUniqueId, newAppendId);
       appendUniqueId = newAppendId;
       preferences.putBool("appendid", appendUniqueId);
       needsReboot = true;
@@ -1661,7 +1979,7 @@
     if (webServer.hasArg("minint")) {
       int v = webServer.arg("minint").toInt();
       if (v >= ALLOWED_MIN_MOVE_SECONDS && v <= ALLOWED_MAX_MOVE_SECONDS && v != minMoveInterval) {
-        Serial.printf("[WebUI] Min Interval: %d -> %d\n", minMoveInterval, v);
+        Serial.printf("[Web] minInt: %d->%d\n", minMoveInterval, v);
         minMoveInterval = v;
         preferences.putInt("minmove", minMoveInterval);
         if (minMoveInterval > maxMoveInterval) {
@@ -1676,7 +1994,7 @@
     if (webServer.hasArg("maxint")) {
       int v = webServer.arg("maxint").toInt();
       if (v >= ALLOWED_MIN_MOVE_SECONDS && v <= ALLOWED_MAX_MOVE_SECONDS && v != maxMoveInterval) {
-        Serial.printf("[WebUI] Max Interval: %d -> %d\n", maxMoveInterval, v);
+        Serial.printf("[Web] maxInt: %d->%d\n", maxMoveInterval, v);
         maxMoveInterval = v;
         preferences.putInt("maxmove", maxMoveInterval);
         if (maxMoveInterval < minMoveInterval) {
@@ -1691,7 +2009,7 @@
     if (webServer.hasArg("xrange")) {
       int v = webServer.arg("xrange").toInt();
       if (v >= 0 && v <= 127 && v != xRange) {
-        Serial.printf("[WebUI] X Range: %d -> %d\n", xRange, v);
+        Serial.printf("[Web] xRange: %d->%d\n", xRange, v);
         xRange = v;
         preferences.putInt("xrange", xRange);
       }
@@ -1701,7 +2019,7 @@
     if (webServer.hasArg("yrange")) {
       int v = webServer.arg("yrange").toInt();
       if (v >= 0 && v <= 127 && v != yRange) {
-        Serial.printf("[WebUI] Y Range: %d -> %d\n", yRange, v);
+        Serial.printf("[Web] yRange: %d->%d\n", yRange, v);
         yRange = v;
         preferences.putInt("yrange", yRange);
       }
@@ -1711,7 +2029,7 @@
     // LED enable
     bool newLed = webServer.hasArg("led");
     if (newLed != ledEnabled) {
-      Serial.printf("[WebUI] LED: %s -> %s\n", ledEnabled ? "on" : "off", newLed ? "on" : "off");
+      Serial.printf("[Web] LED: %d->%d\n", ledEnabled, newLed);
       ledEnabled = newLed;
       preferences.putBool("ledEnabled", ledEnabled);
     }
@@ -1759,6 +2077,100 @@
       "</div></body></html>"));
     delay(500);
     ESP.restart();
+  }
+
+  // Factory reset confirmation page
+  void handleWebReset() {
+    Serial.printf("[WebUI] Reset page accessed from %s\n", webServer.client().remoteIP().toString().c_str());
+    webServer.send(200, "text/html", F(
+      "<!DOCTYPE html><html><head>"
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>Factory Reset</title>"
+      "</head><body style='font-family:sans-serif;text-align:center;padding:40px 20px;background:#f8f9fa;'>"
+      "<div style='max-width:400px;margin:0 auto;background:#fff;padding:30px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);'>"
+      "<h2 style='color:#dc3545;margin-top:0;'>Factory Reset</h2>"
+      "<p style='font-size:16px;'>This will erase all settings including WiFi, MQTT, and device configuration.</p>"
+      "<p style='font-size:14px;color:#666;'>The device will reboot in AP mode for reconfiguration.</p>"
+      "<form method='POST' action='/reset-confirm' style='margin-top:20px;'>"
+      "<button type='submit' style='padding:14px 28px;background:#dc3545;color:#fff;border:none;border-radius:6px;font-size:16px;cursor:pointer;'>Confirm Reset</button>"
+      "</form>"
+      "<p style='margin-top:20px;'><a href='/setup'>&larr; Cancel</a></p>"
+      "</div></body></html>"));
+  }
+
+  // Factory reset execute handler
+  void handleWebResetConfirm() {
+    Serial.printf("[WebUI] Factory reset confirmed from %s\n", webServer.client().remoteIP().toString().c_str());
+    webServer.send(200, "text/html", F(
+      "<!DOCTYPE html><html><head>"
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>Resetting</title>"
+      "</head><body style='font-family:sans-serif;text-align:center;padding:40px 20px;background:#f8f9fa;'>"
+      "<div style='max-width:400px;margin:0 auto;background:#fff;padding:30px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);'>"
+      "<h2 style='color:#dc3545;margin-top:0;'>Resetting...</h2>"
+      "<p style='font-size:18px;'>All settings have been erased.</p>"
+      "<p style='font-size:14px;color:#666;'>The device will reboot in AP mode.</p>"
+      "<div style='margin-top:20px;'><span style='display:inline-block;width:40px;height:40px;border:4px solid #dc3545;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;'></span></div>"
+      "<style>@keyframes spin{to{transform:rotate(360deg);}}</style>"
+      "</div></body></html>"));
+    Serial.println("FACTORY RESET via WebUI");
+    delay(500);
+    preferences.begin("mousewhisker", false);
+    preferences.clear();
+    preferences.end();
+    delay(100);
+    ESP.restart();
+  }
+
+  // Firmware update page
+  void handleFirmwarePage() {
+    String html = F("<!DOCTYPE html><html><head>"
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>Firmware Update</title>"
+      "<style>body{font-family:sans-serif;max-width:480px;margin:20px auto;padding:10px;}"
+      ".btn{display:inline-block;padding:14px 28px;margin:5px;background:#007bff;color:#fff;text-decoration:none;border-radius:6px;border:none;cursor:pointer;font-size:16px;}"
+      ".btn:hover{background:#0056b3;}.btn-warn{background:#dc3545;}.btn-warn:hover{background:#c82333;}"
+      ".box{background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:15px;margin:15px 0;}"
+      "input[type=file]{margin:10px 0;}"
+      "</style></head><body>");
+    html += F("<h2>Firmware Update</h2>");
+    html += "<p>Current version: <b>" + String(FIRMWARE_VERSION) + "</b></p>";
+    html += F("<div class='box'>"
+      "<p><b>Instructions:</b></p>"
+      "<ol>"
+      "<li>Download the *_ota.bin file for your board from <a href='https://github.com/ShannonFritz/mouse-whisker/releases' target='_blank'>GitHub Releases</a></li>"
+      "<li>Select the file below and click Update</li>"
+      "<li>Wait for the update to complete (~30 seconds)</li>"
+      "</ol>"
+      "</div>");
+    html += F("<form method='POST' action='/firmware' enctype='multipart/form-data'>"
+      "<p><input type='file' name='firmware' accept='.bin'></p>"
+      "<p><input type='submit' class='btn btn-warn' value='Update Firmware'></p>"
+      "</form>");
+    html += F("<p><a href='/setup'>&larr; Back to Settings</a></p>");
+    html += F("</body></html>");
+    webServer.send(200, "text/html", html);
+  }
+
+  // Handle firmware upload chunks
+  void handleFirmwareUpload() {
+    HTTPUpload& upload = webServer.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.printf("[OTA] Update starting: %s\n", upload.filename.c_str());
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Serial.printf("[OTA] Begin failed: %s\n", Update.errorString());
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Serial.printf("[OTA] Write failed: %s\n", Update.errorString());
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        Serial.printf("[OTA] Update success: %u bytes\n", upload.totalSize);
+      } else {
+        Serial.printf("[OTA] End failed: %s\n", Update.errorString());
+      }
+    }
   }
 
   void handleWebWiFi() {
@@ -1896,10 +2308,50 @@
       webServer.send(303);
     }
   }
+  
+  void handleWebDiag() {
+    Serial.printf("[WebUI] Diagnostics config update from %s\n", webServer.client().remoteIP().toString().c_str());
+    
+    bool newEnabled = webServer.hasArg("enabled");
+    
+    if (newEnabled != diagnosticsEnabled) {
+      Serial.printf("[WebUI] Diagnostics: %s -> %s\n", 
+                    diagnosticsEnabled ? "enabled" : "disabled",
+                    newEnabled ? "enabled" : "disabled");
+      diagnosticsEnabled = newEnabled;
+      preferences.putBool("diagEnabled", diagnosticsEnabled);
+      
+      // If just enabled, increment boot count now (since we missed it at boot)
+      if (diagnosticsEnabled && bootCount == 0) {
+        bootCount = preferences.getULong("bootCount", 0) + 1;
+        preferences.putULong("bootCount", bootCount);
+        Serial.printf("[Diag] Boot count initialized: %lu\n", bootCount);
+      }
+      
+      webServer.send(200, "text/html", F(
+        "<!DOCTYPE html><html><head>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<meta http-equiv='refresh' content='2;url=/setup'>"
+        "<title>Diagnostics Saved</title>"
+        "</head><body style='font-family:sans-serif;text-align:center;padding:40px 20px;background:#f8f9fa;'>"
+        "<div style='max-width:400px;margin:0 auto;background:#fff;padding:30px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);'>"
+        "<h2 style='color:#28a745;margin-top:0;'>&#10003; Diagnostics Saved</h2>"
+        "<p style='font-size:18px;'>Settings updated.</p>"
+        "</div></body></html>"));
+    } else {
+      webServer.sendHeader("Location", "/setup");
+      webServer.send(303);
+    }
+  }
   #endif
 
   // Captive portal handler - redirects all unknown requests to main page
   void handleCaptivePortal() {
+    // Only act as captive portal in AP mode
+    if (!wifiAPMode) {
+      webServer.send(404, "text/plain", "Not Found");
+      return;
+    }
     String host = webServer.hostHeader();
     // If request is for our IP, serve normally (let onNotFound show 404)
     // Otherwise redirect to our IP (captive portal behavior)
@@ -1913,29 +2365,51 @@
   }
 
   // Handler for common captive portal detection endpoints
+  // iOS CNA requires <TITLE>Success</TITLE> to show blue checkmark
   void handleCaptiveDetect() {
-    String endpoint = webServer.uri();
-    String clientIP = webServer.client().remoteIP().toString();
+    // Only handle captive portal detection in AP mode
+    if (!wifiAPMode) {
+      webServer.send(404, "text/plain", "Not Found");
+      return;
+    }
     
-    // iOS CNA workaround: After user has seen the portal page, return "Success"
-    // so iOS thinks we're connected. Then links will open in Safari!
-    if (portalPageSeen) {
-      Serial.printf("[Captive] %s requested %s -> Success page sent\n", clientIP.c_str(), endpoint.c_str());
+    String clientIP = webServer.client().remoteIP().toString();
+    String endpoint = webServer.uri();
+    
+    // Check if this client has been marked complete
+    auto it = captivePortalFirstSeen.find(clientIP);
+    bool isComplete = (it != captivePortalFirstSeen.end() && it->second == 0);
+    
+    if (isComplete) {
+      // Client has completed portal - return Success with setup link
+      Serial.printf("[Captive] %s requested %s -> Success (complete)\n", clientIP.c_str(), endpoint.c_str());
+      // Includes hidden Success text to make iOS CNA happy
       webServer.send(200, "text/html", F(
-        "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>"
-        "<p>Connected!</p>"
-        "<p><a href='http://192.168.4.1/setup' style='"
-        "display:inline-block;padding:20px 50px;background:#007bff;color:#fff;"
-        "text-decoration:none;border-radius:12px;font-family:sans-serif;font-size:22px;"
-        "'>Open Setup</a></p>"
+        "<HTML><HEAD><TITLE>Success</TITLE></HEAD>"
+        "<BODY style='font-family:-apple-system,sans-serif;text-align:center;padding:40px 20px;margin:0;background:#f8f9fa;'>"
+        "<p style='visibility:hidden;height:0;margin:0;'>Success</p>"
+        "<div style='max-width:320px;margin:0 auto;background:#fff;padding:30px;border-radius:16px;box-shadow:0 2px 10px rgba(0,0,0,0.1);'>"
+        "<h2 style='font-size:24px;margin:0 0 16px;color:#333;'>&#128433; Mouse Whisker</h2>"
+        "<p style='font-size:16px;color:#666;margin:0 0 24px;'>Connected! Tap below to configure.</p>"
+        "<a style='display:block;padding:16px 24px;background:#007bff;color:#fff;text-decoration:none;border-radius:10px;font-size:18px;font-weight:500;' href='http://192.168.4.1/setup'>Open Setup</a>"
+        "</div>"
         "</BODY></HTML>"));
-    } else {
-      // First time - redirect to portal landing page
-      Serial.printf("[Captive] %s requested %s -> Redirect to portal\n", clientIP.c_str(), endpoint.c_str());
-      webServer.sendHeader("Location", "http://192.168.4.1/", true);
-      webServer.send(302, "text/plain", "");
+        } else {
+      // First visit - serve landing page with Success title (triggers CNA popup)
+      Serial.printf("[Captive] %s requested %s -> Success+Landing\n", clientIP.c_str(), endpoint.c_str());
+      captivePortalFirstSeen[clientIP] = 0;  // Mark complete immediately
+      webServer.send(200, "text/html", F(
+        "<HTML><HEAD><TITLE>Mouse Whisker</TITLE></HEAD>"
+        "<BODY style='font-family:-apple-system,sans-serif;text-align:center;padding:40px 20px;margin:0;background:#f8f9fa;'>"
+        "<div style='max-width:320px;margin:0 auto;background:#fff;padding:30px;border-radius:16px;box-shadow:0 2px 10px rgba(0,0,0,0.1);'>"
+        "<h2 style='font-size:24px;margin:0 0 16px;color:#333;'>&#128433; Mouse Whisker</h2>"
+        "<p style='font-size:16px;color:#666;margin:0 0 24px;'>Connected! Tap below to configure.</p>"
+        "<a style='display:block;padding:16px 24px;background:#007bff;color:#fff;text-decoration:none;border-radius:10px;font-size:18px;font-weight:500;' href='http://192.168.4.1/setup'>Open Setup</a>"
+        "</div>"
+        "</BODY></HTML>"));
     }
   }
+  
   void setupWebUI() {
     webServer.on("/", handleWebRoot);
     webServer.on("/setup", handleWebSetup);
@@ -1944,28 +2418,56 @@
     webServer.on("/wifi", HTTP_POST, handleWebWiFi);
     #if ENABLE_MQTT
     webServer.on("/mqtt", HTTP_POST, handleWebMQTT);
+    webServer.on("/diag", HTTP_POST, handleWebDiag);
     #endif
     webServer.on("/whisk", handleWebWhisk);
     webServer.on("/reboot", handleWebReboot);
+    webServer.on("/reset", handleWebReset);
+    webServer.on("/reset-confirm", HTTP_POST, handleWebResetConfirm);
+    webServer.on("/firmware", HTTP_GET, handleFirmwarePage);
+    webServer.on("/firmware", HTTP_POST, [](){
+      webServer.sendHeader("Connection", "close");
+      if (Update.hasError()) {
+        webServer.send(500, "text/html", F(
+          "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+          "<title>Update Failed</title></head>"
+          "<body style='font-family:sans-serif;text-align:center;padding:40px 20px;background:#f8f9fa;'>"
+          "<div style='max-width:400px;margin:0 auto;background:#fff;padding:30px;border-radius:12px;'>"
+          "<h2 style='color:#dc3545;'>&#10007; Update Failed</h2>"
+          "<p>Please try again.</p><p><a href='/firmware'>Back</a></p>"
+          "</div></body></html>"));
+      } else {
+        webServer.send(200, "text/html", F(
+          "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+          "<meta http-equiv='refresh' content='10;url=/setup'><title>Update Success</title></head>"
+          "<body style='font-family:sans-serif;text-align:center;padding:40px 20px;background:#f8f9fa;'>"
+          "<div style='max-width:400px;margin:0 auto;background:#fff;padding:30px;border-radius:12px;'>"
+          "<h2 style='color:#28a745;'>&#10003; Update Successful!</h2>"
+          "<p>Rebooting with new firmware...</p>"
+          "<div style='margin-top:20px;'><span style='display:inline-block;width:40px;height:40px;border:4px solid #007bff;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;'></span></div>"
+          "<style>@keyframes spin{to{transform:rotate(360deg);}}</style>"
+          "</div></body></html>"));
+        delay(500);
+        ESP.restart();
+      }
+    }, handleFirmwareUpload);
     
-    // Captive portal detection endpoints (various OS/browser checks)
-    if (wifiAPMode) {
-      // Android
-      webServer.on("/generate_204", handleCaptiveDetect);
-      webServer.on("/gen_204", handleCaptiveDetect);
-      // Windows
-      webServer.on("/ncsi.txt", handleCaptiveDetect);
-      webServer.on("/connecttest.txt", handleCaptiveDetect);
-      webServer.on("/redirect", handleCaptiveDetect);
-      // Apple
-      webServer.on("/hotspot-detect.html", handleCaptiveDetect);
-      webServer.on("/library/test/success.html", handleCaptiveDetect);
-      // Firefox
-      webServer.on("/canonical.html", handleCaptiveDetect);
-      webServer.on("/success.txt", handleCaptiveDetect);
-      // Catch-all for any other requests
-      webServer.onNotFound(handleCaptivePortal);
-    }
+    // Captive portal detection endpoints - always registered, handlers check wifiAPMode
+    // Android
+    webServer.on("/generate_204", handleCaptiveDetect);
+    webServer.on("/gen_204", handleCaptiveDetect);
+    // Windows
+    webServer.on("/ncsi.txt", handleCaptiveDetect);
+    webServer.on("/connecttest.txt", handleCaptiveDetect);
+    webServer.on("/redirect", handleCaptiveDetect);
+    // Apple
+    webServer.on("/hotspot-detect.html", handleCaptiveDetect);
+    webServer.on("/library/test/success.html", handleCaptiveDetect);
+    // Firefox
+    webServer.on("/canonical.html", handleCaptiveDetect);
+    webServer.on("/success.txt", handleCaptiveDetect);
+    // Catch-all for any other requests (handles captive portal redirect)
+    webServer.onNotFound(handleCaptivePortal);
     
     webServer.begin();
     if (wifiAPMode) {
@@ -2039,6 +2541,21 @@
     bool hasMaxMove = preferences.isKey("maxmove");
     maxMoveInterval = preferences.getInt("maxmove", DEFAULT_MAX_MOVE_INTERVAL);
     Serial.printf("Max Interval: %d [%s]\n", maxMoveInterval, hasMaxMove ? "from flash" : "DEFAULT");
+    
+    // Load diagnostics enabled setting (off by default to minimize flash wear)
+    bool hasDiagEnabled = preferences.isKey("diagEnabled");
+    diagnosticsEnabled = preferences.getBool("diagEnabled", false);
+    Serial.printf("Diagnostics: %s [%s]\n", diagnosticsEnabled ? "Enabled" : "Disabled", hasDiagEnabled ? "from flash" : "DEFAULT");
+    
+    // Load boot counter (always read, but only increment/write if diagnostics enabled)
+    bootCount = preferences.getULong("bootCount", 0);
+    if (diagnosticsEnabled) {
+      bootCount++;
+      preferences.putULong("bootCount", bootCount);
+    }
+    Serial.printf("Boot Count: %lu (reset reason: %s)%s\n", 
+                  bootCount, getResetReason().c_str(),
+                  diagnosticsEnabled ? "" : " [not incremented - diagnostics off]");
     
     #if ENABLE_LED
       bool hasLedEnabled = preferences.isKey("ledEnabled");
@@ -2147,6 +2664,8 @@
     MQTT_TOPIC_BLE_HOST = String("mousewhisker/") + String(uniqueId) + "/ble_host";
     MQTT_TOPIC_USB_MOUNTED = String("mousewhisker/") + String(uniqueId) + "/usb_mounted";
     MQTT_TOPIC_WIFI_RSSI = String("mousewhisker/") + String(uniqueId) + "/wifi_rssi";
+    MQTT_TOPIC_DIAG = String("mousewhisker/") + String(uniqueId) + "/diagnostics";
+    MQTT_TOPIC_SET_DIAG = String("mousewhisker/") + String(uniqueId) + "/set/diagnostics";
     #endif
 
     #if ENABLE_USB
@@ -2301,28 +2820,69 @@
     #endif
     
     #if ENABLE_WIFI
-    // WiFi reconnect logic
+    // WiFi reconnect logic with disconnect tracking
     static unsigned long lastWifiAttempt = 0;
-    if (!wifiAPMode && WiFi.status() != WL_CONNECTED && millis() - lastWifiAttempt > 60000) {
+    static unsigned long wifiDisconnectTime = 0;  // When WiFi was first lost
+    static bool wasWifiConnected = false;
+    bool isWifiConnected = (WiFi.status() == WL_CONNECTED);
+    
+    // Track WiFi disconnect events
+    if (wasWifiConnected && !isWifiConnected && !wifiAPMode) {
+      wifiDisconnectCount++;
+      if (wifiDisconnectTime == 0) {
+        wifiDisconnectTime = millis();  // Mark when we first lost connection
+      }
+      Serial.printf("WiFi disconnected (total disconnects this session: %lu)\n", wifiDisconnectCount);
+    }
+    // Reset disconnect timer when reconnected
+    if (isWifiConnected) {
+      wifiDisconnectTime = 0;
+    }
+    wasWifiConnected = isWifiConnected;
+    
+    if (!wifiAPMode && !isWifiConnected && millis() - lastWifiAttempt > 60000) {
       // Not in AP mode but lost connection - try to reconnect every 60s
       lastWifiAttempt = millis();
-      Serial.println("WiFi disconnected, attempting reconnect...");
-      WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str(), 0, NULL, true);  // Hidden SSID support
+      
+      // After 10 minutes of failed reconnects, fall back to AP mode
+      if (wifiDisconnectTime > 0 && millis() - wifiDisconnectTime > 600000) {
+        Serial.println("WiFi reconnect failed for 10 minutes, enabling AP mode...");
+        wifiDisconnectTime = 0;  // Reset for next time
+        startAPMode();
+      } else {
+        Serial.println("WiFi disconnected, attempting reconnect...");
+        WiFi.disconnect(true);  // Stop any in-progress connection attempt
+        delay(100);
+        WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str(), 0, NULL, true);  // Hidden SSID support
+      }
     }
-    // In AP mode with configured credentials - try WiFi every 15 minutes
-    if (wifiAPMode && wifiSSID.length() > 0 && millis() - lastWifiAttempt > 900000) {
-      lastWifiAttempt = millis();
-      tryWiFiFromAPMode();
+    // In AP mode with configured credentials - try WiFi every 3 minutes (only if no clients connected)
+    if (wifiAPMode && wifiSSID.length() > 0 && millis() - lastWifiAttempt > 180000) {
+      if (WiFi.softAPgetStationNum() == 0) {
+        lastWifiAttempt = millis();
+        tryWiFiFromAPMode();
+      }
     }
     #endif
 
     #if ENABLE_MQTT
     static unsigned long lastMqttAttempt = 0;
     static unsigned long lastRssiPublish = 0;
+    static unsigned long lastDiagPublish = 0;
+    static bool wasMqttConnected = false;
     #if ENABLE_USB
     static bool lastUsbState = false;
     #endif
     unsigned long now = millis();
+    
+    // Track MQTT disconnect events
+    bool isMqttConnected = mqttClient.connected();
+    if (wasMqttConnected && !isMqttConnected) {
+      mqttDisconnectCount++;
+      Serial.printf("MQTT disconnected (total disconnects this session: %lu)\n", mqttDisconnectCount);
+    }
+    wasMqttConnected = isMqttConnected;
+    
     // Only try MQTT if WiFi is connected and MQTT is configured
     if (WiFi.status() == WL_CONNECTED && mqttServer.length() > 0) {
       if (!mqttClient.connected()) {
@@ -2336,6 +2896,11 @@
         if (now - lastRssiPublish >= 60000) {
           lastRssiPublish = now;
           publishConfigJSON();  // Config includes RSSI
+        }
+        // Publish diagnostics every 60 seconds (only when enabled to reduce MQTT traffic)
+        if (diagnosticsEnabled && now - lastDiagPublish >= 60000) {
+          lastDiagPublish = now;
+          publishDiagnosticsJSON();
         }
         #if ENABLE_USB
         // Publish USB state changes

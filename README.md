@@ -4,7 +4,7 @@
 
 Perfect for preventing sleep/lock screens during presentations, downloads, or remote sessions. Works standalone or integrates with your smart home.
 
-![Version](https://img.shields.io/badge/version-1.5.0-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-1.6.3-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
@@ -108,15 +108,19 @@ Don't want to set up Arduino IDE? Flash a pre-built binary directly from your br
 
 ### Available Firmware Builds
 
-All precompiled binaries are configured for Access Point WebUI setup where it can be configured to connect to your Wifi and MQTT Brokers (Home Assistant).  If the board supports it, Bluetooth (BLE) and or USB is also enabled. 
+All precompiled binaries are configured for Access Point WebUI setup where it can be configured to connect to your Wifi and MQTT Brokers (Home Assistant).  If the board supports it, Bluetooth (BLE) and or USB is also enabled.
+
+**Two versions of each binary are provided:**
+- `*_full.bin` — Complete flash image (bootloader + partition table + app) for initial USB flashing
+- `*_ota.bin` — App-only image for OTA firmware updates via WebUI
 
 | File | Board | Features |
 |------|-------|----------|
-| `mouse-whisker_vX.X.X_esp32c3_ble.bin` | ESP32-C3 Super Mini | AP + WiFi + MQTT + BLE |
-| `mouse-whisker_vX.X.X_esp32s3_ble_usb.bin` | ESP32-S3 Super Mini | AP + WiFi + MQTT + BLE + USB |
-| `mouse-whisker_vX.X.X_esp32s3_ble.bin` | ESP32-S3 Super Mini | AP + WiFi + MQTT + BLE (no USB) |
-| `mouse-whisker_vX.X.X_esp32s2_usb.bin` | ESP32-S2 Mini | AP + WiFi + MQTT + USB |
-| `mouse-whisker_vX.X.X_esp32_ble.bin` | ESP32 D1 Mini / NodeMCU | AP + WiFi + MQTT + BLE |
+| `mouse-whisker_vX.X.X_esp32c3_ble_full.bin` | ESP32-C3 Super Mini | AP + WiFi + MQTT + BLE |
+| `mouse-whisker_vX.X.X_esp32s3_ble_usb_full.bin` | ESP32-S3 Super Mini | AP + WiFi + MQTT + BLE + USB |
+| `mouse-whisker_vX.X.X_esp32s3_ble_full.bin` | ESP32-S3 Super Mini | AP + WiFi + MQTT + BLE (no USB) |
+| `mouse-whisker_vX.X.X_esp32s2_usb_full.bin` | ESP32-S2 Mini | AP + WiFi + MQTT + USB |
+| `mouse-whisker_vX.X.X_esp32_ble_full.bin` | ESP32 D1 Mini / NodeMCU | AP + WiFi + MQTT + BLE |
 
 ## ⚡ Compiling your own Firmware
 
@@ -352,31 +356,65 @@ The `<uniqueId>` is a 4-character hex code derived from the chip's factory-progr
 - Board type in Arduino IDE: "ESP32C3 Dev Module"
 - USB CDC On Boot: Enabled *(required for serial output)*
 - Flash Size: 4MB
-- Partition Scheme: Default
+- Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 **For ESP32-S3:**
 - Board type in Arduino IDE: "ESP32S3 Dev Module"
 - USB CDC On Boot: Enabled *(required for serial output)*
 - USB Mode: Hardware CDC and JTAG
+- Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 **For ESP32-S2:**
 - Board type in Arduino IDE: "ESP32S2 Dev Module"
 - USB CDC On Boot: Enabled *(required for serial output)*
+- Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 **For ESP32 D1 Mini:**
 - Board type in Arduino IDE: "ESP32 Dev Module"
 - Serial works over USB (external USB-serial chip)
+- Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 **For ESP32 NodeMCU:**
 - Board type in Arduino IDE: "ESP32 Dev Module" or "NodeMCU-32S"
 - Serial works over USB (external USB-serial chip)
 - LED pin varies by board (GPIO2 is common and will work)
+- Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) *(required for OTA updates)*
 
 </details>
 
 ---
 
 ## 📜 Version History
+
+### v1.6.3
+- ✨ **Hidden SSID Auto-Detection** — Automatically detects hidden networks and uses extended timeouts; no manual checkbox needed
+
+### v1.6.2
+- ✨ **Factory Reset via WebUI** — Reset link in footer with confirmation page to erase all settings
+- 🐛 **Captive Portal Polish** — Consistent landing page styling across all iOS CNA interactions
+
+### v1.6.1
+- ✨ **WiFi Reconnect Logic** — Retries every 60s for 10 min after disconnect, then falls back to AP mode
+- ✨ **Smarter AP Mode Retry** — Attempts WiFi every 3 min (was 15), only when no clients connected
+- 🎨 **WebUI Styling** — Consistent font sizes for buttons and inputs, improved readability
+- 🎨 **WebUI Layout** — WiFi/MQTT/Diagnostics sections now use clean card layout
+- 🧹 **Firmware Link** — Moved to footer for cleaner interface
+
+### v1.6.0
+- ✨ **OTA Firmware Updates** — Upload new firmware via WebUI without USB cable
+- 📦 **Partition Scheme** — Changed to min_spiffs for more code space (~1.9MB vs 1.2MB)
+- 🐛 **iOS Captive Portal Fix** — Proper two-phase response for reliable CNA popup and blue checkmark
+- ✨ **Improved Landing Page** — Styled card UI with "Open Setup" button in captive portal
+- 🔍 **CNA Compatibility** — Uses `<TITLE>Success</TITLE>` pattern that iOS requires for checkmark
+- 🧹 **Code Cleanup** — Removed unused portal-done handler, simplified captive portal logic
+
+### v1.5.1
+- ✨ **Diagnostic Sensors** — Uptime, boot count, reset reason, WiFi/MQTT disconnect counts, free heap memory
+- ✨ **Diagnostics Toggle** — Enable/disable from Home Assistant to minimize flash wear and MQTT traffic
+- ✨ **WebUI Diagnostics** — View and configure diagnostics directly from the web interface
+- ✨ **Diagnostics Help** — Collapsible guide explaining how to interpret each metric
+- 🛡️ **Flash Protection** — Boot count only written when diagnostics enabled (off by default)
+- 🔍 **Troubleshooting Aid** — Helps determine if connectivity issues are WiFi signal or device crashes
 
 ### v1.5.0 — The Whisker Release
 - 🎉 **Rebranded** from "Mouse Jiggler" to "Mouse Whisker"
